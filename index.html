@@ -214,11 +214,8 @@
       </div>
 
       <!-- 클라우드 연결 상태 배지 -->
-      <div id="auth-gate-cloud-banner" class="rounded-2xl border px-3.5 py-2.5 text-xs flex items-center justify-between gap-2 bg-slate-50 border-slate-200 text-slate-600">
+      <div id="auth-gate-cloud-banner" class="rounded-2xl border px-3.5 py-2.5 text-xs flex items-center justify-center gap-2 bg-slate-50 border-slate-200 text-slate-600">
         <span id="auth-gate-cloud-status" class="truncate">클라우드 연결 확인 중...</span>
-        <button id="btn-auth-gate-config" type="button" class="shrink-0 text-[11px] font-semibold text-brand-700 hover:underline cursor-pointer">
-          연동 설정
-        </button>
       </div>
 
       <!-- 이메일 / 비밀번호 입력 폼 -->
@@ -765,8 +762,6 @@
       const STORAGE_KEYS = {
         LAST_LAYOUT: 'praise_conti_last_layout_v2',
         PDF_PATTERN: 'praise_conti_pdf_pattern_v1',
-        CLOUD_URL: 'praise_conti_supabase_url_v1',
-        CLOUD_KEY: 'praise_conti_supabase_anon_key_v1',
         LOCAL_MODE_PREF: 'praise_conti_local_mode_v1'
       };
 
@@ -774,69 +769,6 @@
       const CLOUD_BUCKET = 'sheet-images';
       const DB_NAME = 'PraiseContiStudioDB';
       const DB_VERSION = 1;
-
-      const SUPABASE_SETUP_SQL = `-- 1) 악보 메타데이터 테이블 (본인 계정만 접근 가능)
-create table if not exists public.sheets (
-  id text primary key,
-  user_id uuid not null references auth.users(id) on delete cascade,
-  title text not null,
-  chord_key text default '',
-  memo text default '',
-  image_path text not null,
-  thumb_path text default '',
-  width integer default 0,
-  height integer default 0,
-  file_size integer default 0,
-  created_at bigint not null,
-  updated_at bigint not null
-);
-
--- 2) 콘티 테이블 (본인 계정만 접근 가능)
-create table if not exists public.contis (
-  id text primary key,
-  user_id uuid not null references auth.users(id) on delete cascade,
-  title text not null,
-  worship_date text default '',
-  items jsonb not null default '[]'::jsonb,
-  layout jsonb not null default '{}'::jsonb,
-  created_at bigint not null,
-  updated_at bigint not null
-);
-
--- 3) RLS(행 수준 보안) 활성화 및 본인 전용 정책
-alter table public.sheets enable row level security;
-alter table public.contis enable row level security;
-
-drop policy if exists "sheets_owner_all" on public.sheets;
-create policy "sheets_owner_all" on public.sheets
-  for all using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
-
-drop policy if exists "contis_owner_all" on public.contis;
-create policy "contis_owner_all" on public.contis
-  for all using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
-
--- 4) 비공개(Private) 악보 이미지 Storage 버킷 및 본인 폴더 정책
-insert into storage.buckets (id, name, public)
-values ('sheet-images', 'sheet-images', false)
-on conflict (id) do nothing;
-
-drop policy if exists "sheet_images_owner_select" on storage.objects;
-create policy "sheet_images_owner_select" on storage.objects
-  for select using (bucket_id = 'sheet-images' and (storage.foldername(name))[1] = auth.uid()::text);
-
-drop policy if exists "sheet_images_owner_insert" on storage.objects;
-create policy "sheet_images_owner_insert" on storage.objects
-  for insert with check (bucket_id = 'sheet-images' and (storage.foldername(name))[1] = auth.uid()::text);
-
-drop policy if exists "sheet_images_owner_update" on storage.objects;
-create policy "sheet_images_owner_update" on storage.objects
-  for update using (bucket_id = 'sheet-images' and (storage.foldername(name))[1] = auth.uid()::text);
-
-drop policy if exists "sheet_images_owner_delete" on storage.objects;
-create policy "sheet_images_owner_delete" on storage.objects
-  for delete using (bucket_id = 'sheet-images' and (storage.foldername(name))[1] = auth.uid()::text);`;
 
       /* =======================================================
          2. 공용 유틸리티 (한글 NFC, 검색, 파일명, 클립보드)
@@ -1167,7 +1099,6 @@ create policy "sheet_images_owner_delete" on storage.objects
         authGate: document.getElementById('auth-gate'),
         authGateCloudBanner: document.getElementById('auth-gate-cloud-banner'),
         authGateCloudStatus: document.getElementById('auth-gate-cloud-status'),
-        btnAuthGateConfig: document.getElementById('btn-auth-gate-config'),
         authGateForm: document.getElementById('auth-gate-form'),
         authEmail: document.getElementById('auth-email'),
         authPassword: document.getElementById('auth-password'),
@@ -1411,11 +1342,32 @@ create policy "sheet_images_owner_delete" on storage.objects
           sheetImageUrlMap.set(sheetId, url);
           return url;
         }
-        if (sheet.cloudImagePath && state.cloud.client && state.cloud.user) {
+        const fallbackPath = sheet.cloudImagePath || (state.cloud.user ? `${state.cloud.user.id}/${sheet.id}.jpg` : '');
+        if (fallbackPath && state.cloud.client && state.cloud.user) {
+          if (!sheet.cloudImagePath) sheet.cloudImagePath = fallbackPath;
           ensureSheetFullBlob(sheetId).then((blob) => {
             if (blob && typeof onLoaded === 'function') onLoaded();
           });
           return getSheetThumbUrl(sheetId);
+        }
+        return sheet.tempUrl || getSheetThumbUrl(sheetId) || '';
+      }
+
+      function getSheetThumbUrl(sheetId, onLoaded = null) {
+        if (sheetThumbUrlMap.has(sheetId)) return sheetThumbUrlMap.get(sheetId);
+        const sheet = getSheetById(sheetId);
+        if (!sheet) return '';
+        const srcBlob = sheet.thumbnailBlob instanceof Blob ? sheet.thumbnailBlob : sheet.blob;
+        if (srcBlob instanceof Blob) {
+          const url = URL.createObjectURL(srcBlob);
+          sheetThumbUrlMap.set(sheetId, url);
+          return url;
+        }
+        if (state.cloud.client && state.cloud.user) {
+          if (!sheet.cloudImagePath) sheet.cloudImagePath = `${state.cloud.user.id}/${sheet.id}.jpg`;
+          ensureSheetFullBlob(sheetId).then((blob) => {
+            if (blob && typeof onLoaded === 'function') onLoaded();
+          });
         }
         return sheet.tempUrl || '';
       }
@@ -3021,6 +2973,7 @@ create policy "sheet_images_owner_delete" on storage.objects
             const imgWrap = document.createElement('div');
             imgWrap.className = 'flex-1 min-h-0 w-full flex items-center justify-center overflow-hidden pointer-events-none';
             const displayUrl = ensureCroppedImageUrl(item, () => renderPreview());
+            const sheetMeta = getSheetById(item.sheetId);
 
             if (displayUrl) {
               const imgEl = document.createElement('img');
@@ -3029,6 +2982,19 @@ create policy "sheet_images_owner_delete" on storage.objects
               imgEl.className = 'w-full h-full object-contain block pointer-events-none';
               imgEl.style.filter = imgFilter;
               imgWrap.appendChild(imgEl);
+            } else if (sheetMeta && state.cloud.client && state.cloud.user) {
+              ensureSheetFullBlob(item.sheetId).then((blob) => {
+                if (blob) {
+                  renderContiList();
+                  renderPreview();
+                }
+              });
+              imgWrap.innerHTML = `
+                <div class="w-full h-full border border-dashed border-brand-200 bg-brand-50/40 rounded-lg flex flex-col items-center justify-center text-brand-600 text-xs p-3 text-center">
+                  <span class="font-semibold">클라우드에서 악보 불러오는 중...</span>
+                  <span class="text-[10px] mt-0.5 text-slate-500">잠시만 기다려 주세요</span>
+                </div>
+              `;
             } else {
               imgWrap.innerHTML = `
                 <div class="w-full h-full border border-dashed border-rose-200 bg-rose-50/50 rounded-lg flex flex-col items-center justify-center text-rose-400 text-xs p-3 text-center">
@@ -3797,15 +3763,9 @@ create policy "sheet_images_owner_delete" on storage.objects
          17. Supabase 클라우드 계정 인증 & 기기간 양방향 동기화
       ======================================================= */
       function getEffectiveSupabaseConfig() {
-        let savedUrl = '';
-        let savedKey = '';
-        try {
-          savedUrl = localStorage.getItem(STORAGE_KEYS.CLOUD_URL) || '';
-          savedKey = localStorage.getItem(STORAGE_KEYS.CLOUD_KEY) || '';
-        } catch {}
-        const url = normalizeSupabaseUrl(DEFAULT_SUPABASE_URL || savedUrl);
-        const anonKey = String(DEFAULT_SUPABASE_ANON_KEY || savedKey || '').trim();
-        return { url, anonKey, isHardcoded: Boolean(DEFAULT_SUPABASE_URL && DEFAULT_SUPABASE_ANON_KEY) };
+        const url = normalizeSupabaseUrl(DEFAULT_SUPABASE_URL);
+        const anonKey = String(DEFAULT_SUPABASE_ANON_KEY || '').trim();
+        return { url, anonKey };
       }
 
       function initSupabaseClientIfPossible() {
@@ -3831,12 +3791,12 @@ create policy "sheet_images_owner_delete" on storage.objects
         const user = state.cloud.user;
 
         if (!configured) {
-          els.authGateCloudBanner.className = 'rounded-2xl border px-3.5 py-2.5 text-xs flex items-center justify-between gap-2 bg-amber-50 border-amber-200 text-amber-800';
-          els.authGateCloudStatus.textContent = 'Supabase 공개 키(anon key) 설정이 필요합니다';
+          els.authGateCloudBanner.className = 'rounded-2xl border px-3.5 py-2.5 text-xs flex items-center justify-center gap-2 bg-amber-50 border-amber-200 text-amber-800';
+          els.authGateCloudStatus.textContent = '클라우드 서버에 연결할 수 없습니다';
           els.btnAuthLogin.disabled = true;
           els.btnAuthSignup.disabled = true;
         } else {
-          els.authGateCloudBanner.className = 'rounded-2xl border px-3.5 py-2.5 text-xs flex items-center justify-between gap-2 bg-emerald-50 border-emerald-200 text-emerald-800';
+          els.authGateCloudBanner.className = 'rounded-2xl border px-3.5 py-2.5 text-xs flex items-center justify-center gap-2 bg-emerald-50 border-emerald-200 text-emerald-800';
           els.authGateCloudStatus.textContent = '클라우드 서버 연결됨 · 로그인 또는 회원가입 가능';
           els.btnAuthLogin.disabled = false;
           els.btnAuthSignup.disabled = false;
@@ -3853,7 +3813,7 @@ create policy "sheet_images_owner_delete" on storage.objects
         } else {
           els.authGate.classList.remove('hidden');
           els.cloudDot.className = 'w-2 h-2 rounded-full bg-slate-400 shrink-0';
-          els.cloudBtnLabel.textContent = '클라우드 연동';
+          els.cloudBtnLabel.textContent = '계정 로그인';
         }
       }
 
@@ -3866,7 +3826,7 @@ create policy "sheet_images_owner_delete" on storage.objects
 
       async function handleAuthSignIn(email, password) {
         if (!state.cloud.client) {
-          showAuthGateMessage('error', '먼저 오른쪽 위 [연동 설정]에서 Supabase URL과 공개 키를 입력해 주세요.');
+          showAuthGateMessage('error', '클라우드 서버에 연결되어 있지 않습니다.');
           return;
         }
         if (!email || !password) {
@@ -3895,7 +3855,7 @@ create policy "sheet_images_owner_delete" on storage.objects
 
       async function handleAuthSignUp(email, password) {
         if (!state.cloud.client) {
-          showAuthGateMessage('error', '먼저 오른쪽 위 [연동 설정]에서 Supabase URL과 공개 키를 입력해 주세요.');
+          showAuthGateMessage('error', '클라우드 서버에 연결되어 있지 않습니다.');
           return;
         }
         if (!email || password.length < 6) {
@@ -4147,58 +4107,32 @@ create policy "sheet_images_owner_delete" on storage.objects
         }
       }
 
-      function openCloudSettingsModal() {
-        const cfg = getEffectiveSupabaseConfig();
+      function openCloudAccountModal() {
         const user = state.cloud.user;
 
         openModal({
-          title: 'Supabase 클라우드 연동 · 계정 관리',
-          maxWidth: 'max-w-lg',
+          title: '클라우드 계정 · 동기화',
+          maxWidth: 'max-w-md',
           bodyHtml: `
-            <div class="space-y-4 text-xs">
+            <div class="space-y-3 text-xs">
               ${
                 user
-                  ? `<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3 flex items-center justify-between gap-2">
+                  ? `<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3.5 space-y-2.5">
                       <div>
-                        <div class="font-bold text-emerald-900">로그인됨: ${escapeHtml(user.email || '')}</div>
-                        <div class="text-[11px] text-emerald-700 mt-0.5">악보 DB와 콘티가 본인 계정으로 안전하게 동기화됩니다.</div>
+                        <div class="font-bold text-emerald-900">로그인된 계정</div>
+                        <div class="text-sm font-semibold text-emerald-800 mt-0.5 break-all">${escapeHtml(user.email || '')}</div>
+                        <div class="text-[11px] text-emerald-700 mt-1">악보 DB와 콘티가 본인 계정으로 안전하게 자동 동기화됩니다.</div>
                       </div>
-                      <div class="flex items-center gap-1.5 shrink-0">
-                        <button id="btn-modal-sync-now" type="button" class="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer">지금 동기화</button>
-                        <button id="btn-modal-signout" type="button" class="px-2.5 py-1.5 rounded-lg bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 font-bold cursor-pointer">로그아웃</button>
+                      <div class="flex items-center justify-end gap-2 pt-1">
+                        <button id="btn-modal-sync-now" type="button" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer">지금 동기화</button>
+                        <button id="btn-modal-signout" type="button" class="px-3 py-1.5 rounded-lg bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 font-bold cursor-pointer">로그아웃</button>
                       </div>
                     </div>`
-                  : `<div class="rounded-xl bg-slate-50 border border-slate-200 p-3 flex items-center justify-between gap-2">
-                      <span class="text-slate-600">현재 로그인되어 있지 않습니다.</span>
-                      <button id="btn-modal-open-login" type="button" class="px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white font-bold cursor-pointer">로그인 화면 열기</button>
+                  : `<div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5 flex items-center justify-between gap-2">
+                      <span class="text-slate-600">현재 로컬 단독 모드로 사용 중입니다.</span>
+                      <button id="btn-modal-open-login" type="button" class="shrink-0 px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white font-bold cursor-pointer">로그인 화면 열기</button>
                     </div>`
               }
-
-              <div class="space-y-2">
-                <div class="font-bold text-slate-700">1단계: Supabase 프로젝트 연결 정보</div>
-                <div>
-                  <label class="block text-[11px] font-semibold text-slate-600 mb-1">Project URL</label>
-                  <input id="cfg-sb-url" type="text" value="${escapeHtml(cfg.url)}" placeholder="https://xxxx.supabase.co" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs select-text" />
-                </div>
-                <div>
-                  <label class="block text-[11px] font-semibold text-slate-600 mb-1">Anon / Publishable Public Key</label>
-                  <input id="cfg-sb-key" type="text" value="${escapeHtml(cfg.anonKey)}" placeholder="eyJhbGci... 또는 sb_publishable_..." class="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs select-text" />
-                </div>
-                <div class="flex justify-end">
-                  <button id="btn-save-sb-cfg" type="button" class="px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white font-bold cursor-pointer">설정 저장 및 연결</button>
-                </div>
-              </div>
-
-              <div class="pt-3 border-t border-slate-200 space-y-2">
-                <div class="flex items-center justify-between">
-                  <span class="font-bold text-slate-700">2단계: 본인 전용 DB & 비공개 저장소 SQL</span>
-                  <button id="btn-copy-sb-sql" type="button" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold cursor-pointer">SQL 전체 복사</button>
-                </div>
-                <p class="text-[11px] text-slate-500 leading-relaxed">
-                  Supabase 대시보드 → <strong>SQL Editor</strong>에 아래 SQL을 붙여넣고 <strong>Run</strong>을 1회 실행하면 본인 계정 데이터만 보호하는 보안 정책(RLS)이 자동 설정됩니다.
-                </p>
-                <pre class="bg-slate-900 text-slate-100 rounded-xl p-3 text-[10px] overflow-x-auto max-h-36 select-text">${escapeHtml(SUPABASE_SETUP_SQL)}</pre>
-              </div>
             </div>
           `,
           buttons: [{ label: '닫기', variant: 'secondary', onClick: closeModal }]
@@ -4226,24 +4160,6 @@ create policy "sheet_images_owner_delete" on storage.objects
             updateCloudAndAuthGateUI();
           });
         }
-
-        document.getElementById('btn-save-sb-cfg').addEventListener('click', () => {
-          const newUrl = normalizeSupabaseUrl(document.getElementById('cfg-sb-url').value);
-          const newKey = document.getElementById('cfg-sb-key').value.trim();
-          try {
-            localStorage.setItem(STORAGE_KEYS.CLOUD_URL, newUrl);
-            localStorage.setItem(STORAGE_KEYS.CLOUD_KEY, newKey);
-          } catch {}
-          const ok = initSupabaseClientIfPossible();
-          updateCloudAndAuthGateUI();
-          closeModal();
-          showToast(ok ? 'Supabase 연결 설정이 저장되었습니다.' : 'URL과 공개 키를 다시 확인해 주세요.', ok ? 'success' : 'warning');
-        });
-
-        document.getElementById('btn-copy-sb-sql').addEventListener('click', () => {
-          const ok = copyTextToClipboard(SUPABASE_SETUP_SQL);
-          showToast(ok ? '보안 설정 SQL이 클립보드에 복사되었습니다!' : 'SQL 복사에 실패했습니다.', ok ? 'success' : 'error');
-        });
       }
 
       /* =======================================================
@@ -4251,7 +4167,6 @@ create policy "sheet_images_owner_delete" on storage.objects
       ======================================================= */
       function bindEvents() {
         // 시작 로그인 화면 이벤트
-        els.btnAuthGateConfig.addEventListener('click', openCloudSettingsModal);
         els.authGateForm.addEventListener('submit', (e) => {
           e.preventDefault();
           handleAuthSignIn(els.authEmail.value.trim(), els.authPassword.value);
@@ -4272,7 +4187,7 @@ create policy "sheet_images_owner_delete" on storage.objects
           markDirty();
           renderPreview();
         });
-        els.btnCloudAccount.addEventListener('click', openCloudSettingsModal);
+        els.btnCloudAccount.addEventListener('click', openCloudAccountModal);
         els.btnHeaderNew.addEventListener('click', createNewConti);
         els.btnHeaderSave.addEventListener('click', () => saveCurrentConti(false));
         els.btnHeaderPrint.addEventListener('click', openPrintOptionsModal);
