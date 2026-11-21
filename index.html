@@ -1,0 +1,2875 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>찬양 콘티 & 악보 자동 편집기</title>
+
+  <!-- Pretendard & Inter 폰트 로드 -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- A4 PDF 직접 생성을 위한 jsPDF CDN (미리보기 샌드박스 환경에서도 PDF 저장 지원) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Pretendard', 'Inter', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              200: '#c7d2fe',
+              500: '#4f46e5',
+              600: '#4338ca',
+              700: '#3730a3',
+            }
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- 동적 @page 방향 제어를 위한 전용 스타일 태그 (JS에서 portrait/landscape 자동 주입) -->
+  <style id="dynamic-page-style">
+    @page {
+      size: A4 portrait;
+      margin: 0;
+    }
+  </style>
+
+  <!-- A4 규격 정밀 렌더링, 스크롤바 및 인쇄(@media print) 전용 최소 스타일 -->
+  <style>
+    :root {
+      --a4-w: 210mm;
+      --a4-h: 297mm;
+    }
+
+    body {
+      font-family: 'Pretendard', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    /* 세련된 커스텀 스크롤바 */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+
+    /* A4 용지 물리 규격 유지 클래스 */
+    .a4-sheet {
+      width: var(--a4-w);
+      height: var(--a4-h);
+      background: #ffffff;
+      box-sizing: border-box;
+      position: relative;
+      overflow: hidden;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 내부 드래그 정렬 시 시각적 피드백 */
+    .conti-card.drag-over-top {
+      box-shadow: 0 -3px 0 0 #4f46e5;
+    }
+    .conti-card.drag-over-bottom {
+      box-shadow: 0 3px 0 0 #4f46e5;
+    }
+    .conti-card.is-dragging {
+      opacity: 0.45;
+      transform: scale(0.985);
+    }
+
+    /* 인쇄 / PDF 출력 전용 규칙: 모든 UI를 숨기고 A4 악보 용지만 정밀 출력 */
+    @media print {
+      html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: auto !important;
+        height: auto !important;
+        background: #ffffff !important;
+        overflow: visible !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+
+      .no-print {
+        display: none !important;
+      }
+
+      #app-root,
+      #workspace-main,
+      #preview-panel,
+      #preview-scroll-viewport,
+      #preview-scale-stage,
+      #preview-pages-container {
+        display: block !important;
+        position: static !important;
+        width: auto !important;
+        height: auto !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: visible !important;
+        background: #ffffff !important;
+        transform: none !important;
+        border: none !important;
+        box-shadow: none !important;
+      }
+
+      .a4-page-wrapper {
+        width: auto !important;
+        height: auto !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        display: block !important;
+        page-break-after: always !important;
+        break-after: page !important;
+      }
+
+      .a4-scale-box {
+        width: auto !important;
+        height: auto !important;
+        overflow: visible !important;
+      }
+
+      .a4-page-wrapper:last-child {
+        page-break-after: auto !important;
+        break-after: auto !important;
+      }
+
+      /* 브라우저 서브픽셀 반올림으로 인한 빈 페이지 방지용 미세 안전 여백(-0.4mm) */
+      .a4-sheet {
+        width: var(--a4-w) !important;
+        height: calc(var(--a4-h) - 0.4mm) !important;
+        margin: 0 !important;
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        transform: none !important;
+      }
+
+      .a4-page-meta-badge {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 h-screen w-screen overflow-hidden select-none">
+
+  <!-- 전체 앱 컨테이너 -->
+  <div id="app-root" class="flex flex-col h-full w-full">
+
+    <!-- ========================================================= -->
+    <!-- 상단 툴바 (Header Toolbar) -->
+    <!-- ========================================================= -->
+    <header id="app-header" class="no-print h-14 bg-white border-b border-slate-200 px-3 sm:px-5 flex items-center justify-between gap-2 shrink-0 z-30 shadow-xs">
+      <!-- 왼쪽: 로고 + 현재 콘티 제목 + 저장 상태 -->
+      <div class="flex items-center gap-2.5 min-w-0 flex-1">
+        <div class="w-8 h-8 rounded-xl bg-brand-600 text-white flex items-center justify-center shrink-0 shadow-sm" title="찬양 콘티 & 악보 자동 편집기">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.1" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+          </svg>
+        </div>
+
+        <div class="flex items-center gap-2 min-w-0 flex-1 max-w-md">
+          <input
+            id="header-conti-title"
+            type="text"
+            placeholder="예배 / 콘티 제목 입력..."
+            class="w-full min-w-0 text-sm sm:text-base font-semibold text-slate-800 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-brand-500 rounded-lg px-2 py-1 outline-none transition truncate select-text"
+          />
+          <span id="save-status-badge" class="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
+            <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+            새 문서
+          </span>
+        </div>
+      </div>
+
+      <!-- 중앙(모바일 전용): 편집 / 미리보기 전환 토글 -->
+      <div class="flex lg:hidden bg-slate-100 p-0.5 rounded-lg shrink-0">
+        <button id="mobile-view-edit" type="button" class="px-2.5 py-1 text-xs font-semibold rounded-md bg-white text-brand-600 shadow-xs transition">편집</button>
+        <button id="mobile-view-preview" type="button" class="px-2.5 py-1 text-xs font-semibold rounded-md text-slate-600 transition">미리보기</button>
+      </div>
+
+      <!-- 오른쪽: 주요 액션 버튼 -->
+      <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <button id="btn-new-conti" type="button" class="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 active:scale-[0.99] transition">
+          <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+          <span class="hidden sm:inline">새 콘티</span>
+        </button>
+
+        <button id="btn-save-conti" type="button" class="inline-flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-semibold text-brand-700 bg-brand-50 border border-brand-200 hover:bg-brand-100 active:scale-[0.99] transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+          </svg>
+          <span class="hidden sm:inline">콘티 저장</span>
+        </button>
+
+        <button id="btn-print-pdf" type="button" class="inline-flex items-center gap-1.5 px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 shadow-xs active:scale-[0.99] transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+          </svg>
+          <span>인쇄 / PDF 저장</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- ========================================================= -->
+    <!-- 메인 작업 공간 (좌우 2분할) -->
+    <!-- ========================================================= -->
+    <main id="workspace-main" class="flex-1 flex min-h-0 overflow-hidden relative">
+
+      <!-- ------------------------------------------------------- -->
+      <!-- 왼쪽 패널: 설정 및 관리 창 -->
+      <!-- ------------------------------------------------------- -->
+      <aside id="left-panel" class="no-print w-full lg:w-[440px] xl:w-[470px] bg-white border-r border-slate-200 flex flex-col shrink-0 h-full z-20">
+
+        <!-- 4개 메인 탭 네비게이션 (콘티 관리 - 악보 DB - 콘티 구성 - 레이아웃·인쇄) -->
+        <nav class="grid grid-cols-4 border-b border-slate-200 bg-slate-50/80 p-1.5 gap-1 shrink-0" role="tablist">
+          <button data-tab="saved" class="tab-btn flex flex-col sm:flex-row items-center justify-center gap-1 py-2 px-1.5 rounded-lg text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 transition" role="tab">
+            <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+            </svg>
+            <span>콘티 관리</span>
+          </button>
+
+          <button data-tab="db" class="tab-btn flex flex-col sm:flex-row items-center justify-center gap-1 py-2 px-1.5 rounded-lg text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 transition" role="tab">
+            <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+            </svg>
+            <span>악보 DB</span>
+            <span id="tab-db-count" class="hidden sm:inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] bg-slate-200 text-slate-600">0</span>
+          </button>
+
+          <button data-tab="conti" class="tab-btn flex flex-col sm:flex-row items-center justify-center gap-1 py-2 px-1.5 rounded-lg text-xs font-semibold transition bg-white text-brand-600 shadow-sm" role="tab">
+            <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h10" />
+            </svg>
+            <span>콘티 구성</span>
+          </button>
+
+          <button data-tab="layout" class="tab-btn flex flex-col sm:flex-row items-center justify-center gap-1 py-2 px-1.5 rounded-lg text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 transition" role="tab">
+            <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v14a1 1 0 01-1 1h-4a1 1 0 01-1-1V5z" />
+            </svg>
+            <span>레이아웃·인쇄</span>
+          </button>
+        </nav>
+
+        <!-- 탭 콘텐츠 래퍼 -->
+        <div class="flex-1 overflow-y-auto min-h-0">
+
+          <!-- =================================================== -->
+          <!-- TAB 1: 콘티 구성 -->
+          <!-- =================================================== -->
+          <section id="tab-panel-conti" class="tab-panel p-4 space-y-4">
+            <!-- 예배 기본 정보 (간결 1행 입력) -->
+            <div class="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-2.5">
+              <div class="grid grid-cols-12 gap-2">
+                <div class="col-span-7">
+                  <label class="block text-[11px] font-semibold text-slate-500 mb-1">예배 제목</label>
+                  <input id="conti-title-input" type="text" placeholder="예: 주일 3부 찬양 예배" class="w-full text-xs sm:text-sm bg-white border border-slate-200 focus:border-brand-500 rounded-lg px-2.5 py-1.5 outline-none transition select-text" />
+                </div>
+                <div class="col-span-5">
+                  <label class="block text-[11px] font-semibold text-slate-500 mb-1">예배 날짜</label>
+                  <input id="conti-date-input" type="date" class="w-full text-xs sm:text-sm bg-white border border-slate-200 focus:border-brand-500 rounded-lg px-2 py-1.5 outline-none transition select-text" />
+                </div>
+              </div>
+            </div>
+
+            <!-- 악보 파일 업로드 드롭존 -->
+            <div id="file-dropzone" class="group relative border-2 border-dashed border-slate-300 hover:border-brand-400 bg-slate-50/70 hover:bg-brand-50/40 rounded-2xl p-4 text-center cursor-pointer transition">
+              <input id="sheet-file-input" type="file" accept="image/*" multiple class="hidden" />
+              <div class="flex flex-col items-center gap-1.5 pointer-events-none">
+                <div class="w-10 h-10 rounded-xl bg-white border border-slate-200 group-hover:border-brand-200 text-brand-600 flex items-center justify-center shadow-xs transition">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                  </svg>
+                </div>
+                <p class="text-xs sm:text-sm font-semibold text-slate-700">악보 이미지 선택 또는 드래그 앤 드롭</p>
+                <p class="text-[11px] text-slate-500">JPG, PNG, WebP 다중 선택 지원 · 화면 어디에 놓아도 자동 추가 및 DB 저장</p>
+              </div>
+            </div>
+
+            <!-- 콘티 목록 헤더 -->
+            <div class="flex items-center justify-between pt-1">
+              <div class="flex items-center gap-2">
+                <h2 class="text-xs font-bold text-slate-700 uppercase tracking-wider">콘티 곡 순서</h2>
+                <span id="conti-count-badge" class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-brand-100 text-brand-700">0곡</span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <button id="btn-clear-conti-items" type="button" class="hidden text-[11px] font-medium text-rose-500 hover:text-rose-600 hover:bg-rose-50 px-2 py-1 rounded-md transition">
+                  전체 비우기
+                </button>
+              </div>
+            </div>
+
+            <!-- 곡 카드 리스트 (드래그 앤 드롭 정렬 대상) -->
+            <div id="conti-list" class="space-y-2.5 pb-6">
+              <!-- JS로 동적 렌더링 -->
+            </div>
+          </section>
+
+          <!-- =================================================== -->
+          <!-- TAB 2: 악보 DB -->
+          <!-- =================================================== -->
+          <section id="tab-panel-db" class="tab-panel hidden p-4 space-y-3.5">
+            <!-- 실시간 검색창 -->
+            <div class="relative">
+              <svg class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                id="db-search-input"
+                type="search"
+                placeholder="곡 제목, 코드(G, Bb), 메모로 실시간 검색..."
+                class="w-full pl-9 pr-9 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 focus:bg-white focus:border-brand-500 rounded-xl outline-none transition select-text"
+              />
+              <button id="db-search-clear" type="button" class="hidden absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            <!-- DB 요약 정보 & 업로드 버튼 -->
+            <div class="flex items-center justify-between bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2">
+              <div class="text-[11px] text-slate-600">
+                저장된 악보 <strong id="db-total-count" class="text-slate-900">0</strong>개
+                <span class="mx-1 text-slate-300">|</span>
+                용량 <strong id="db-total-size" class="text-slate-900">0 KB</strong>
+              </div>
+              <button id="btn-db-direct-upload" type="button" class="text-[11px] font-semibold text-brand-600 hover:text-brand-700 bg-white border border-slate-200 hover:border-brand-300 px-2.5 py-1 rounded-lg shadow-2xs transition">
+                + 악보 업로드
+              </button>
+            </div>
+
+            <!-- DB 악보 목록 -->
+            <div id="db-list" class="space-y-2 pb-6">
+              <!-- JS로 동적 렌더링 -->
+            </div>
+          </section>
+
+          <!-- =================================================== -->
+          <!-- TAB 3: 콘티 관리 -->
+          <!-- =================================================== -->
+          <section id="tab-panel-saved" class="tab-panel hidden p-4 space-y-3.5">
+            <!-- 콘티 작업 버튼 그룹 -->
+            <div class="grid grid-cols-3 gap-2">
+              <button id="btn-saved-new" type="button" class="flex flex-col items-center justify-center gap-1 py-2.5 px-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 transition">
+                <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" /></svg>
+                새 콘티
+              </button>
+              <button id="btn-saved-save" type="button" class="flex flex-col items-center justify-center gap-1 py-2.5 px-2 rounded-xl border border-brand-200 bg-brand-50 hover:bg-brand-100 text-xs font-semibold text-brand-700 transition">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
+                현재 저장
+              </button>
+              <button id="btn-saved-save-as" type="button" class="flex flex-col items-center justify-center gap-1 py-2.5 px-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 transition">
+                <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                다른 이름 저장
+              </button>
+            </div>
+
+            <!-- 저장된 콘티 검색 -->
+            <div class="relative">
+              <svg class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                id="conti-search-input"
+                type="search"
+                placeholder="저장된 예배 제목, 날짜, 수록곡 검색..."
+                class="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 focus:bg-white focus:border-brand-500 rounded-xl outline-none transition select-text"
+              />
+            </div>
+
+            <!-- 저장된 콘티 목록 -->
+            <div id="saved-conti-list" class="space-y-2.5 pb-6">
+              <!-- JS로 동적 렌더링 -->
+            </div>
+          </section>
+
+          <!-- =================================================== -->
+          <!-- TAB 4: 레이아웃·인쇄 -->
+          <!-- =================================================== -->
+          <section id="tab-panel-layout" class="tab-panel hidden p-4 space-y-5 pb-8">
+            <!-- A4 용지 방향 선택 -->
+            <div class="space-y-2">
+              <div class="flex items-center justify-between">
+                <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wider">A4 용지 방향</h3>
+                <span class="text-[11px] font-medium text-slate-400">A4 고정 규격</span>
+              </div>
+              <div class="grid grid-cols-2 gap-2.5">
+                <button type="button" data-orientation="portrait" class="orientation-btn flex items-center gap-3 p-3 rounded-xl border-2 border-brand-600 bg-brand-50/70 text-brand-700 shadow-2xs transition text-left">
+                  <div class="w-7 h-9 rounded border-2 border-current bg-white/80 shrink-0"></div>
+                  <div>
+                    <div class="text-xs font-bold">세로 (Portrait)</div>
+                    <div class="text-[10px] opacity-80">210 × 297 mm</div>
+                  </div>
+                </button>
+                <button type="button" data-orientation="landscape" class="orientation-btn flex items-center gap-3 p-3 rounded-xl border-2 border-slate-200 bg-white text-slate-600 hover:border-slate-300 transition text-left">
+                  <div class="w-9 h-7 rounded border-2 border-current bg-white/80 shrink-0"></div>
+                  <div>
+                    <div class="text-xs font-bold">가로 (Landscape)</div>
+                    <div class="text-[10px] opacity-80">297 × 210 mm</div>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            <!-- 페이지당 악보 배치 (가로 병렬 1열/2열/3열) -->
+            <div class="space-y-2">
+              <div class="flex items-center justify-between">
+                <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wider">페이지당 악보 배치</h3>
+                <span class="text-[11px] font-medium text-slate-400">가로 나란히 배치</span>
+              </div>
+              <div class="grid grid-cols-3 gap-2">
+                <button type="button" data-perpage="1" class="perpage-btn flex flex-col items-center gap-2 p-3 rounded-xl border-2 border-slate-200 bg-white text-slate-600 hover:border-slate-300 transition">
+                  <div class="w-10 h-7 grid grid-cols-1 gap-0.5 p-0.5 border border-current rounded bg-white/80">
+                    <div class="bg-current/25 rounded-[1px]"></div>
+                  </div>
+                  <span class="text-xs font-bold">1곡 (1열)</span>
+                </button>
+                <button type="button" data-perpage="2" class="perpage-btn flex flex-col items-center gap-2 p-3 rounded-xl border-2 border-brand-600 bg-brand-50/70 text-brand-700 shadow-2xs transition">
+                  <div class="w-10 h-7 grid grid-cols-2 gap-0.5 p-0.5 border border-current rounded bg-white/80">
+                    <div class="bg-current/25 rounded-[1px]"></div>
+                    <div class="bg-current/25 rounded-[1px]"></div>
+                  </div>
+                  <span class="text-xs font-bold">2곡 (2열)</span>
+                </button>
+                <button type="button" data-perpage="3" class="perpage-btn flex flex-col items-center gap-2 p-3 rounded-xl border-2 border-slate-200 bg-white text-slate-600 hover:border-slate-300 transition">
+                  <div class="w-10 h-7 grid grid-cols-3 gap-0.5 p-0.5 border border-current rounded bg-white/80">
+                    <div class="bg-current/25 rounded-[1px]"></div>
+                    <div class="bg-current/25 rounded-[1px]"></div>
+                    <div class="bg-current/25 rounded-[1px]"></div>
+                  </div>
+                  <span class="text-xs font-bold">3곡 (3열)</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- 초소형 선택형 제목 ON/OFF 및 글자 크기 조절 -->
+            <div class="space-y-2.5">
+              <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wider">초소형 제목 표시 (악보 면적 우선)</h3>
+              <div class="bg-slate-50 border border-slate-200/80 rounded-xl">
+                <div class="p-3 space-y-3">
+                  <label class="flex items-center justify-between gap-3 cursor-pointer">
+                    <div>
+                      <div class="text-xs font-semibold text-slate-800">상단 예배 제목 1줄 표시</div>
+                      <div class="text-[11px] text-slate-500">용지 최상단에 예배명·날짜·쪽수 표시</div>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                      <span id="status-show-header" class="text-[10px] font-bold text-brand-600 w-6 text-right">ON</span>
+                      <div class="relative inline-flex items-center">
+                        <input id="toggle-show-header" type="checkbox" class="sr-only peer" />
+                        <div class="w-11 h-6 bg-slate-300 peer-focus:ring-2 peer-focus:ring-brand-200 peer-checked:bg-brand-600 rounded-full transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:shadow-sm after:transition-transform peer-checked:after:translate-x-5"></div>
+                      </div>
+                    </div>
+                  </label>
+
+                  <!-- 상단 예배 제목 글자 크기 조절 -->
+                  <div id="header-fontsize-control" class="pt-2 border-t border-slate-200/70 transition-opacity">
+                    <div class="flex justify-between text-xs mb-1">
+                      <span class="font-medium text-slate-700">상단 예배 제목 글자 크기</span>
+                      <span id="val-header-fontsize" class="font-bold text-brand-600">10 px</span>
+                    </div>
+                    <input id="range-header-fontsize" type="range" min="8" max="24" step="1" class="w-full accent-brand-600 cursor-pointer" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 여백 및 간격 조절 -->
+            <div class="space-y-3">
+              <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wider">여백 및 악보 간격</h3>
+              <div class="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-3">
+                <div>
+                  <div class="flex justify-between text-xs mb-1">
+                    <span class="font-medium text-slate-700">용지 바깥 여백</span>
+                    <span id="val-margin" class="font-bold text-brand-600">5 mm</span>
+                  </div>
+                  <input id="range-margin" type="range" min="0" max="18" step="1" class="w-full accent-brand-600 cursor-pointer" />
+                </div>
+
+                <div>
+                  <div class="flex justify-between text-xs mb-1">
+                    <span class="font-medium text-slate-700">악보 사이 간격</span>
+                    <span id="val-gap" class="font-bold text-brand-600">3 mm</span>
+                  </div>
+                  <input id="range-gap" type="range" min="0" max="14" step="1" class="w-full accent-brand-600 cursor-pointer" />
+                </div>
+              </div>
+            </div>
+
+            <!-- 인쇄 화질 최적화 (흑백, 대비, 밝기) -->
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wider">인쇄 화질 보정</h3>
+                <button id="btn-reset-filters" type="button" class="text-[11px] font-medium text-slate-500 hover:text-brand-600 transition">기본값 복원</button>
+              </div>
+              <div class="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-3">
+                <label class="flex items-center justify-between gap-3 cursor-pointer pb-2 border-b border-slate-200/70">
+                  <div>
+                    <div class="text-xs font-semibold text-slate-800">흑백(그레이스케일) 인쇄 모드</div>
+                    <div class="text-[11px] text-slate-500">잉크 절약 및 깔끔한 흑백 악보 출력</div>
+                  </div>
+                  <div class="flex items-center gap-2 shrink-0">
+                    <span id="status-grayscale" class="text-[10px] font-bold text-slate-400 w-6 text-right">OFF</span>
+                    <div class="relative inline-flex items-center">
+                      <input id="toggle-grayscale" type="checkbox" class="sr-only peer" />
+                      <div class="w-11 h-6 bg-slate-300 peer-focus:ring-2 peer-focus:ring-brand-200 peer-checked:bg-brand-600 rounded-full transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:shadow-sm after:transition-transform peer-checked:after:translate-x-5"></div>
+                    </div>
+                  </div>
+                </label>
+
+                <div>
+                  <div class="flex justify-between text-xs mb-1">
+                    <span class="font-medium text-slate-700">선명도 (대비)</span>
+                    <span id="val-contrast" class="font-bold text-brand-600">105%</span>
+                  </div>
+                  <input id="range-contrast" type="range" min="80" max="200" step="5" class="w-full accent-brand-600 cursor-pointer" />
+                </div>
+
+                <div>
+                  <div class="flex justify-between text-xs mb-1">
+                    <span class="font-medium text-slate-700">밝기 (배경 잡티 제거)</span>
+                    <span id="val-brightness" class="font-bold text-brand-600">100%</span>
+                  </div>
+                  <input id="range-brightness" type="range" min="80" max="140" step="2" class="w-full accent-brand-600 cursor-pointer" />
+                </div>
+              </div>
+            </div>
+
+            <!-- 원클릭 인쇄 버튼 -->
+            <div class="pt-3 border-t border-slate-100 flex justify-center">
+              <button id="btn-layout-print" type="button" class="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs sm:text-sm font-semibold shadow-sm hover:shadow transition active:scale-[0.98] cursor-pointer">
+                <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                </svg>
+                <span>인쇄 / PDF 저장</span>
+              </button>
+            </div>
+          </section>
+
+        </div>
+      </aside>
+
+      <!-- ------------------------------------------------------- -->
+      <!-- 오른쪽 패널: 실시간 A4 인쇄 미리보기 창 -->
+      <!-- ------------------------------------------------------- -->
+      <section id="preview-panel" class="hidden lg:flex flex-1 flex-col min-w-0 h-full bg-slate-200/80 relative">
+        <!-- 미리보기 상단 상태바 -->
+        <div id="preview-toolbar" class="no-print h-11 bg-white/90 backdrop-blur border-b border-slate-200/90 px-4 flex items-center justify-between gap-2 shrink-0 z-10">
+          <div class="flex items-center gap-2 text-xs text-slate-600 truncate">
+            <span class="inline-flex items-center gap-1 font-semibold text-slate-800">
+              <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+              실시간 A4 미리보기
+            </span>
+            <span class="text-slate-300">|</span>
+            <span id="preview-summary-text" class="truncate">A4 세로 · 페이지당 2곡 · 0페이지</span>
+          </div>
+
+          <!-- 줌 컨트롤 -->
+          <div class="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg shrink-0">
+            <button id="btn-zoom-out" type="button" class="w-7 h-7 flex items-center justify-center rounded-md text-slate-600 hover:bg-white hover:text-slate-900 transition" title="축소">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 12H4" /></svg>
+            </button>
+            <button id="btn-zoom-fit" type="button" class="px-2 h-7 text-[11px] font-semibold text-slate-700 hover:bg-white rounded-md transition" title="창 크기에 맞춤">
+              <span id="zoom-label">자동 맞춤</span>
+            </button>
+            <button id="btn-zoom-in" type="button" class="w-7 h-7 flex items-center justify-center rounded-md text-slate-600 hover:bg-white hover:text-slate-900 transition" title="확대">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" /></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- 스크롤 가능한 A4 페이지 뷰포트 -->
+        <div id="preview-scroll-viewport" class="flex-1 overflow-auto p-5 sm:p-8 flex flex-col items-center">
+          <div id="preview-pages-container" class="flex flex-col items-center gap-6">
+            <!-- JS가 A4 페이지들을 실시간 렌더링 -->
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ========================================================= -->
+  <!-- 전역 외부 파일 드래그 앤 드롭 오버레이 (내부 순서 드래그와 완벽 분리) -->
+  <!-- ========================================================= -->
+  <div id="global-file-drop-overlay" class="no-print hidden fixed inset-0 z-50 bg-brand-900/40 backdrop-blur-[2px] flex items-center justify-center p-6 pointer-events-none">
+    <div class="bg-white rounded-3xl border-2 border-dashed border-brand-500 shadow-2xl px-10 py-9 text-center max-w-md w-full">
+      <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-brand-50 text-brand-600 flex items-center justify-center">
+        <svg class="w-8 h-8" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+        </svg>
+      </div>
+      <h3 class="text-lg font-bold text-slate-900 mb-1">여기에 악보 이미지를 놓으세요</h3>
+      <p class="text-xs sm:text-sm text-slate-500">즉시 콘티와 미리보기에 반영되며 악보 DB에 자동 압축 저장됩니다.</p>
+    </div>
+  </div>
+
+  <!-- ========================================================= -->
+  <!-- 공용 모달 (확인 / 다른 이름으로 저장 / DB 악보 수정 / 악보 확대) -->
+  <!-- ========================================================= -->
+  <div id="modal-backdrop" class="no-print hidden fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-[1px] flex items-center justify-center p-4">
+    <div id="modal-dialog" class="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden transform transition-all">
+      <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+        <h3 id="modal-title" class="text-base font-bold text-slate-900">알림</h3>
+        <button id="modal-close-x" type="button" class="text-slate-400 hover:text-slate-700 p-1 rounded-lg transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+      <div id="modal-body" class="p-5 text-sm text-slate-600 select-text"></div>
+      <div id="modal-footer" class="px-5 py-3.5 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2"></div>
+    </div>
+  </div>
+
+  <!-- ========================================================= -->
+  <!-- 토스트 알림 컨테이너 -->
+  <!-- ========================================================= -->
+  <div id="toast-container" class="no-print fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-sm"></div>
+
+  <!-- 자주 쓰이는 코드 자동완성 목록 -->
+  <datalist id="chord-keys-list">
+    <option value="C"></option><option value="C#"></option><option value="Db"></option>
+    <option value="D"></option><option value="Eb"></option><option value="E"></option>
+    <option value="F"></option><option value="F#"></option><option value="Gb"></option>
+    <option value="G"></option><option value="Ab"></option><option value="A"></option>
+    <option value="Bb"></option><option value="B"></option>
+    <option value="Am"></option><option value="Bm"></option><option value="Cm"></option>
+    <option value="Dm"></option><option value="Em"></option><option value="Fm"></option><option value="Gm"></option>
+  </datalist>
+
+  <!-- ========================================================= -->
+  <!-- 애플리케이션 스크립트 -->
+  <!-- ========================================================= -->
+  <script>
+    (() => {
+      'use strict';
+
+      /* =======================================================
+         1. 유틸리티 함수 (한글 NFC 정규화, 검색, 날짜, ID 생성)
+      ======================================================= */
+
+      /**
+       * macOS 등에서 발생하는 한글 자소 분리(NFD)를 완성형(NFC)으로 통일합니다.
+       */
+      function normalizeNFC(str) {
+        return String(str ?? '').normalize('NFC');
+      }
+
+      /**
+       * 검색 정확도 보장용 정규화: NFC 변환 + 공백 제거 + 소문자화
+       */
+      function normalizeForSearch(str) {
+        return normalizeNFC(str).replace(/\s+/g, '').toLowerCase();
+      }
+
+      /**
+       * HTML 이스케이프 (XSS 방지)
+       */
+      function escapeHtml(str) {
+        return String(str ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      /**
+       * 고유 ID 생성기
+       */
+      function generateId(prefix = 'id') {
+        const rand = Math.random().toString(36).slice(2, 8);
+        return `${prefix}_${Date.now().toString(36)}_${rand}`;
+      }
+
+      /**
+       * 오늘 날짜 YYYY-MM-DD
+       */
+      function getTodayDateString() {
+        const d = new Date();
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}`;
+      }
+
+      /**
+       * 파일 크기 포맷 (KB / MB)
+       */
+      function formatBytes(bytes) {
+        if (!bytes || bytes <= 0) return '0 KB';
+        if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+      }
+
+      /**
+       * 파일명에서 곡 제목과 코드(Key) 자동 추출 (NFC 정규화 적용)
+       * 예: "주 은혜임을(G).jpg" -> { title: "주 은혜임을", key: "G" }
+       * 예: "은혜_Bb.png" -> { title: "은혜", key: "Bb" }
+       */
+      function parseSheetFilename(filename) {
+        const nfc = normalizeNFC(filename);
+        // 확장자 제거
+        let base = nfc.replace(/\.[^.]+$/, '').trim();
+        let detectedKey = '';
+
+        // 괄호/대괄호/언더스코어 끝부분의 코드 패턴 감지 (예: (G), [Bb], _E, -F#m)
+        const keyPattern = /(?:[\s_-]*[\(\[](([A-G][#b]?m?))[\)\]]|[\s_-]+([A-G][#b]?m?))$/i;
+        const match = base.match(keyPattern);
+        if (match) {
+          const rawKey = match[1] || match[3] || '';
+          if (rawKey) {
+            // 첫 글자 대문자화 (예: bb -> Bb, f#m -> F#m)
+            detectedKey = rawKey.charAt(0).toUpperCase() + rawKey.slice(1);
+            base = base.slice(0, match.index).trim();
+          }
+        }
+
+        // 언더스코어는 보기 좋게 공백으로 치환
+        const cleanTitle = normalizeNFC(base.replace(/_+/g, ' ').replace(/\s+/g, ' ').trim()) || '제목 없는 악보';
+        return { title: cleanTitle, key: normalizeNFC(detectedKey) };
+      }
+
+      /* =======================================================
+         2. IndexedDB 데이터베이스 계층 (악보 DB & 콘티 DB)
+      ======================================================= */
+      const DB_NAME = 'PraiseContiStudioDB';
+      const DB_VERSION = 1;
+      const STORE_SHEETS = 'sheets';
+      const STORE_CONTIS = 'contis';
+
+      let dbInstance = null;
+      let useMemoryFallback = false;
+      const memoryStore = {
+        [STORE_SHEETS]: new Map(),
+        [STORE_CONTIS]: new Map()
+      };
+
+      function openDatabase() {
+        return new Promise((resolve, reject) => {
+          if (useMemoryFallback) {
+            resolve(null);
+            return;
+          }
+          if (dbInstance) {
+            resolve(dbInstance);
+            return;
+          }
+          try {
+            const request = indexedDB.open(DB_NAME, DB_VERSION);
+            request.onupgradeneeded = (event) => {
+              const db = event.target.result;
+              if (!db.objectStoreNames.contains(STORE_SHEETS)) {
+                const sheetStore = db.createObjectStore(STORE_SHEETS, { keyPath: 'id' });
+                sheetStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+              }
+              if (!db.objectStoreNames.contains(STORE_CONTIS)) {
+                const contiStore = db.createObjectStore(STORE_CONTIS, { keyPath: 'id' });
+                contiStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+              }
+            };
+            request.onsuccess = (event) => {
+              dbInstance = event.target.result;
+              resolve(dbInstance);
+            };
+            request.onerror = () => {
+              useMemoryFallback = true;
+              resolve(null);
+            };
+          } catch (err) {
+            useMemoryFallback = true;
+            resolve(null);
+          }
+        });
+      }
+
+      async function dbPut(storeName, value) {
+        const db = await openDatabase();
+        if (!db) {
+          memoryStore[storeName].set(value.id, value);
+          return value;
+        }
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(storeName, 'readwrite');
+          tx.objectStore(storeName).put(value);
+          tx.oncomplete = () => resolve(value);
+          tx.onerror = () => reject(tx.error);
+        });
+      }
+
+      async function dbDelete(storeName, key) {
+        const db = await openDatabase();
+        if (!db) {
+          memoryStore[storeName].delete(key);
+          return;
+        }
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(storeName, 'readwrite');
+          tx.objectStore(storeName).delete(key);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+      }
+
+      async function dbGetAll(storeName) {
+        const db = await openDatabase();
+        if (!db) {
+          return Array.from(memoryStore[storeName].values());
+        }
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(storeName, 'readonly');
+          const req = tx.objectStore(storeName).getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+        });
+      }
+
+      /* =======================================================
+         3. 악보 이미지 자동 최적화 (압축 & 썸네일 생성)
+      ======================================================= */
+
+      /**
+       * 업로드된 이미지 파일을 인쇄용 고선명 압축본(최대 2000px)과
+       * 빠른 목록 렌더링용 썸네일(최대 320px) Blob으로 최적화합니다.
+       */
+      function optimizeSheetImage(fileOrBlob) {
+        return new Promise((resolve, reject) => {
+          const tempUrl = URL.createObjectURL(fileOrBlob);
+          const img = new Image();
+          img.onload = () => {
+            try {
+              const origW = img.naturalWidth || img.width;
+              const origH = img.naturalHeight || img.height;
+
+              // 1) 인쇄 최적화 본체 (긴 변 최대 2000px)
+              const MAX_DIM = 2000;
+              let targetW = origW;
+              let targetH = origH;
+              if (Math.max(origW, origH) > MAX_DIM) {
+                const ratio = MAX_DIM / Math.max(origW, origH);
+                targetW = Math.round(origW * ratio);
+                targetH = Math.round(origH * ratio);
+              }
+
+              const mainCanvas = document.createElement('canvas');
+              mainCanvas.width = targetW;
+              mainCanvas.height = targetH;
+              const ctx = mainCanvas.getContext('2d');
+              // 투명 PNG 배경이 검정으로 변하지 않도록 흰색 채움
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, targetW, targetH);
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = 'high';
+              ctx.drawImage(img, 0, 0, targetW, targetH);
+
+              // 2) 경량 썸네일 (긴 변 최대 300px)
+              const THUMB_DIM = 300;
+              const thumbRatio = Math.min(1, THUMB_DIM / Math.max(origW, origH));
+              const thumbW = Math.max(1, Math.round(origW * thumbRatio));
+              const thumbH = Math.max(1, Math.round(origH * thumbRatio));
+
+              const thumbCanvas = document.createElement('canvas');
+              thumbCanvas.width = thumbW;
+              thumbCanvas.height = thumbH;
+              const tCtx = thumbCanvas.getContext('2d');
+              tCtx.fillStyle = '#ffffff';
+              tCtx.fillRect(0, 0, thumbW, thumbH);
+              tCtx.drawImage(img, 0, 0, thumbW, thumbH);
+
+              mainCanvas.toBlob((mainBlob) => {
+                if (!mainBlob) {
+                  URL.revokeObjectURL(tempUrl);
+                  reject(new Error('이미지 압축 실패'));
+                  return;
+                }
+                thumbCanvas.toBlob((thumbBlob) => {
+                  URL.revokeObjectURL(tempUrl);
+                  resolve({
+                    blob: mainBlob,
+                    thumbnailBlob: thumbBlob || mainBlob,
+                    width: targetW,
+                    height: targetH,
+                    fileSize: mainBlob.size
+                  });
+                }, 'image/jpeg', 0.72);
+              }, 'image/jpeg', 0.86);
+            } catch (err) {
+              URL.revokeObjectURL(tempUrl);
+              reject(err);
+            }
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(tempUrl);
+            reject(new Error('이미지 파일을 읽을 수 없습니다.'));
+          };
+          img.src = tempUrl;
+        });
+      }
+
+      /* =======================================================
+         4. 애플리케이션 상태 (State) 및 기본 설정
+      ======================================================= */
+      function createDefaultLayout() {
+        return {
+          orientation: 'portrait', // 'portrait' | 'landscape'
+          perPage: 2,              // 1 | 2 | 3
+          showHeader: true,
+          headerFontSize: 10,      // px (8 ~ 24)
+          marginMm: 5,
+          gapMm: 3,
+          grayscale: false,
+          contrast: 105,
+          brightness: 100
+        };
+      }
+
+      function createFreshConti() {
+        return {
+          id: null,
+          title: '',
+          date: getTodayDateString(),
+          items: [],
+          layout: createDefaultLayout()
+        };
+      }
+
+      const state = {
+        activeTab: 'conti',
+        mobileView: 'edit',
+        isDirty: false,
+        conti: createFreshConti(),
+        dbSheets: [],
+        dbContis: [],
+        dbSearchQuery: '',
+        contiSearchQuery: '',
+        zoomMode: 'fit',
+        zoomScale: 0.75
+      };
+
+      // ObjectURL 캐시 (메모리 누수 방지 및 빠른 렌더링)
+      const sheetImageUrlMap = new Map();
+      const sheetThumbUrlMap = new Map();
+
+      // 외부 파일 드래그와 내부 곡 순서 드래그 분리용 상태 변수
+      let isInternalCardDragging = false;
+      let draggingCardUid = null;
+      let externalDragCounter = 0;
+
+      /* =======================================================
+         5. DOM 요소 참조 (els)
+      ======================================================= */
+      const els = {
+        dynamicPageStyle: document.getElementById('dynamic-page-style'),
+
+        // 상단 툴바 & 반응형 패널
+        headerTitle: document.getElementById('header-conti-title'),
+        saveStatusBadge: document.getElementById('save-status-badge'),
+        mobileViewEdit: document.getElementById('mobile-view-edit'),
+        mobileViewPreview: document.getElementById('mobile-view-preview'),
+        btnNewConti: document.getElementById('btn-new-conti'),
+        btnSaveConti: document.getElementById('btn-save-conti'),
+        btnPrintPdf: document.getElementById('btn-print-pdf'),
+        leftPanel: document.getElementById('left-panel'),
+        previewPanel: document.getElementById('preview-panel'),
+
+        // 탭 네비게이션
+        tabBtns: Array.from(document.querySelectorAll('.tab-btn')),
+        tabPanels: Array.from(document.querySelectorAll('.tab-panel')),
+        tabDbCount: document.getElementById('tab-db-count'),
+
+        // 콘티 구성 탭
+        contiTitleInput: document.getElementById('conti-title-input'),
+        contiDateInput: document.getElementById('conti-date-input'),
+        fileDropzone: document.getElementById('file-dropzone'),
+        sheetFileInput: document.getElementById('sheet-file-input'),
+        contiCountBadge: document.getElementById('conti-count-badge'),
+        btnClearContiItems: document.getElementById('btn-clear-conti-items'),
+        contiList: document.getElementById('conti-list'),
+
+        // 악보 DB 탭
+        dbSearchInput: document.getElementById('db-search-input'),
+        dbSearchClear: document.getElementById('db-search-clear'),
+        dbTotalCount: document.getElementById('db-total-count'),
+        dbTotalSize: document.getElementById('db-total-size'),
+        btnDbDirectUpload: document.getElementById('btn-db-direct-upload'),
+        dbList: document.getElementById('db-list'),
+
+        // 콘티 관리 탭
+        btnSavedNew: document.getElementById('btn-saved-new'),
+        btnSavedSave: document.getElementById('btn-saved-save'),
+        btnSavedSaveAs: document.getElementById('btn-saved-save-as'),
+        contiSearchInput: document.getElementById('conti-search-input'),
+        savedContiList: document.getElementById('saved-conti-list'),
+
+        // 레이아웃·인쇄 탭
+        orientationBtns: Array.from(document.querySelectorAll('.orientation-btn')),
+        perpageBtns: Array.from(document.querySelectorAll('.perpage-btn')),
+        toggleShowHeader: document.getElementById('toggle-show-header'),
+        statusShowHeader: document.getElementById('status-show-header'),
+        headerFontSizeControl: document.getElementById('header-fontsize-control'),
+        valHeaderFontSize: document.getElementById('val-header-fontsize'),
+        rangeHeaderFontSize: document.getElementById('range-header-fontsize'),
+        valMargin: document.getElementById('val-margin'),
+        rangeMargin: document.getElementById('range-margin'),
+        valGap: document.getElementById('val-gap'),
+        rangeGap: document.getElementById('range-gap'),
+        toggleGrayscale: document.getElementById('toggle-grayscale'),
+        statusGrayscale: document.getElementById('status-grayscale'),
+        valContrast: document.getElementById('val-contrast'),
+        rangeContrast: document.getElementById('range-contrast'),
+        valBrightness: document.getElementById('val-brightness'),
+        rangeBrightness: document.getElementById('range-brightness'),
+        btnResetFilters: document.getElementById('btn-reset-filters'),
+        btnLayoutPrint: document.getElementById('btn-layout-print'),
+
+        // 미리보기 패널
+        previewSummaryText: document.getElementById('preview-summary-text'),
+        btnZoomOut: document.getElementById('btn-zoom-out'),
+        btnZoomFit: document.getElementById('btn-zoom-fit'),
+        zoomLabel: document.getElementById('zoom-label'),
+        btnZoomIn: document.getElementById('btn-zoom-in'),
+        previewScrollViewport: document.getElementById('preview-scroll-viewport'),
+        previewPagesContainer: document.getElementById('preview-pages-container'),
+
+        // 오버레이, 모달, 토스트
+        globalFileDropOverlay: document.getElementById('global-file-drop-overlay'),
+        modalBackdrop: document.getElementById('modal-backdrop'),
+        modalDialog: document.getElementById('modal-dialog'),
+        modalTitle: document.getElementById('modal-title'),
+        modalCloseX: document.getElementById('modal-close-x'),
+        modalBody: document.getElementById('modal-body'),
+        modalFooter: document.getElementById('modal-footer'),
+        toastContainer: document.getElementById('toast-container')
+      };
+
+      /* =======================================================
+         6. 이미지 URL 캐시 관리 헬퍼
+      ======================================================= */
+      function setSheetUrls(sheetId, mainBlobOrUrl, thumbBlobOrUrl) {
+        if (mainBlobOrUrl) {
+          const prev = sheetImageUrlMap.get(sheetId);
+          const next = typeof mainBlobOrUrl === 'string' ? mainBlobOrUrl : URL.createObjectURL(mainBlobOrUrl);
+          if (prev && prev !== next && prev.startsWith('blob:')) {
+            URL.revokeObjectURL(prev);
+          }
+          sheetImageUrlMap.set(sheetId, next);
+        }
+        if (thumbBlobOrUrl) {
+          const prevT = sheetThumbUrlMap.get(sheetId);
+          const nextT = typeof thumbBlobOrUrl === 'string' ? thumbBlobOrUrl : URL.createObjectURL(thumbBlobOrUrl);
+          if (prevT && prevT !== nextT && prevT.startsWith('blob:')) {
+            URL.revokeObjectURL(prevT);
+          }
+          sheetThumbUrlMap.set(sheetId, nextT);
+        }
+      }
+
+      function getSheetImageUrl(sheetId) {
+        if (sheetImageUrlMap.has(sheetId)) return sheetImageUrlMap.get(sheetId);
+        const sheet = state.dbSheets.find((s) => s.id === sheetId);
+        if (sheet && sheet.blob) {
+          const url = URL.createObjectURL(sheet.blob);
+          sheetImageUrlMap.set(sheetId, url);
+          return url;
+        }
+        return '';
+      }
+
+      function getSheetThumbUrl(sheetId) {
+        if (sheetThumbUrlMap.has(sheetId)) return sheetThumbUrlMap.get(sheetId);
+        const sheet = state.dbSheets.find((s) => s.id === sheetId);
+        if (sheet && (sheet.thumbnailBlob || sheet.blob)) {
+          const url = URL.createObjectURL(sheet.thumbnailBlob || sheet.blob);
+          sheetThumbUrlMap.set(sheetId, url);
+          return url;
+        }
+        return getSheetImageUrl(sheetId);
+      }
+
+      function revokeSheetUrls(sheetId) {
+        const mainUrl = sheetImageUrlMap.get(sheetId);
+        if (mainUrl && mainUrl.startsWith('blob:')) URL.revokeObjectURL(mainUrl);
+        sheetImageUrlMap.delete(sheetId);
+
+        const thumbUrl = sheetThumbUrlMap.get(sheetId);
+        if (thumbUrl && thumbUrl.startsWith('blob:')) URL.revokeObjectURL(thumbUrl);
+        sheetThumbUrlMap.delete(sheetId);
+      }
+
+      /* =======================================================
+         7. 토스트 알림 & 공용 모달 시스템 (alert/confirm 대체)
+      ======================================================= */
+      function showToast(message, type = 'info') {
+        const styles = {
+          success: 'bg-emerald-600 text-white',
+          error: 'bg-rose-600 text-white',
+          warning: 'bg-amber-500 text-white',
+          info: 'bg-slate-800 text-white'
+        };
+        const toast = document.createElement('div');
+        toast.className = `pointer-events-auto px-4 py-2.5 rounded-xl shadow-lg text-xs sm:text-sm font-medium flex items-center gap-2 transition-all duration-200 opacity-0 translate-y-2 ${styles[type] || styles.info}`;
+        toast.textContent = message;
+        els.toastContainer.appendChild(toast);
+
+        requestAnimationFrame(() => {
+          toast.classList.remove('opacity-0', 'translate-y-2');
+        });
+
+        setTimeout(() => {
+          toast.classList.add('opacity-0', 'translate-y-2');
+          setTimeout(() => toast.remove(), 220);
+        }, 2800);
+      }
+
+      function closeModal() {
+        els.modalBackdrop.classList.add('hidden');
+        els.modalBody.innerHTML = '';
+        els.modalFooter.innerHTML = '';
+        els.modalDialog.className = 'bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden transform transition-all';
+      }
+
+      function openModal({ title = '알림', bodyHtml = '', buttons = [], onMount = null, maxWidth = 'max-w-md' }) {
+        els.modalTitle.textContent = title;
+        els.modalDialog.className = `bg-white rounded-2xl shadow-2xl border border-slate-200 w-full ${maxWidth} overflow-hidden transform transition-all`;
+        els.modalBody.innerHTML = bodyHtml;
+        els.modalFooter.innerHTML = '';
+
+        const variantClasses = {
+          primary: 'bg-brand-600 hover:bg-brand-700 text-white font-semibold',
+          danger: 'bg-rose-600 hover:bg-rose-700 text-white font-semibold',
+          secondary: 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-medium'
+        };
+
+        buttons.forEach((btnCfg) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = btnCfg.label;
+          btn.className = `px-3.5 py-2 rounded-lg text-xs sm:text-sm transition cursor-pointer ${variantClasses[btnCfg.variant || 'secondary']}`;
+          btn.addEventListener('click', () => {
+            if (btnCfg.onClick) btnCfg.onClick();
+          });
+          els.modalFooter.appendChild(btn);
+        });
+
+        els.modalBackdrop.classList.remove('hidden');
+        if (onMount) onMount();
+      }
+
+      function confirmDialog({ title = '확인', message = '', confirmLabel = '확인', cancelLabel = '취소', confirmVariant = 'primary' }) {
+        return new Promise((resolve) => {
+          let resolved = false;
+          const finish = (val) => {
+            if (resolved) return;
+            resolved = true;
+            closeModal();
+            resolve(val);
+          };
+          openModal({
+            title,
+            bodyHtml: `<p class="text-sm text-slate-600 whitespace-pre-line leading-relaxed">${escapeHtml(message)}</p>`,
+            buttons: [
+              { label: cancelLabel, variant: 'secondary', onClick: () => finish(false) },
+              { label: confirmLabel, variant: confirmVariant, onClick: () => finish(true) }
+            ]
+          });
+          const onClose = () => {
+            els.modalCloseX.removeEventListener('click', onClose);
+            finish(false);
+          };
+          els.modalCloseX.addEventListener('click', onClose);
+        });
+      }
+
+      function openSheetZoomModal(sheetId, title = '') {
+        const url = getSheetImageUrl(sheetId);
+        if (!url) {
+          showToast('악보 이미지를 찾을 수 없습니다.', 'warning');
+          return;
+        }
+        openModal({
+          title: title || '악보 크게 보기',
+          maxWidth: 'max-w-3xl',
+          bodyHtml: `
+            <div class="max-h-[72vh] overflow-auto bg-slate-100 rounded-xl p-2 flex items-center justify-center">
+              <img src="${url}" alt="${escapeHtml(title)}" class="max-w-full h-auto rounded-lg shadow-sm bg-white" />
+            </div>
+          `,
+          buttons: [{ label: '닫기', variant: 'secondary', onClick: closeModal }]
+        });
+      }
+
+      /* =======================================================
+         8. 상단 상태 표시, 탭 전환 및 반응형 모바일 뷰
+      ======================================================= */
+      function markDirty() {
+        state.isDirty = true;
+        renderHeaderStatus();
+      }
+
+      function renderHeaderStatus() {
+        if (els.headerTitle.value !== state.conti.title) {
+          els.headerTitle.value = state.conti.title;
+        }
+        if (els.contiTitleInput.value !== state.conti.title) {
+          els.contiTitleInput.value = state.conti.title;
+        }
+        if (els.contiDateInput.value !== state.conti.date) {
+          els.contiDateInput.value = state.conti.date;
+        }
+
+        if (state.isDirty) {
+          els.saveStatusBadge.className = 'shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700';
+          els.saveStatusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>수정됨';
+        } else if (state.conti.id) {
+          els.saveStatusBadge.className = 'shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700';
+          els.saveStatusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>저장됨';
+        } else {
+          els.saveStatusBadge.className = 'shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600';
+          els.saveStatusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>새 문서';
+        }
+      }
+
+      function switchTab(tabKey) {
+        state.activeTab = tabKey;
+        els.tabBtns.forEach((btn) => {
+          const isActive = btn.dataset.tab === tabKey;
+          btn.classList.toggle('bg-white', isActive);
+          btn.classList.toggle('text-brand-600', isActive);
+          btn.classList.toggle('shadow-sm', isActive);
+          btn.classList.toggle('font-semibold', isActive);
+          btn.classList.toggle('text-slate-600', !isActive);
+          btn.classList.toggle('font-medium', !isActive);
+        });
+        els.tabPanels.forEach((panel) => {
+          panel.classList.toggle('hidden', panel.id !== `tab-panel-${tabKey}`);
+        });
+      }
+
+      function setMobileView(view) {
+        state.mobileView = view;
+        const isDesktop = window.innerWidth >= 1024;
+        if (isDesktop) {
+          els.leftPanel.classList.remove('hidden');
+          els.previewPanel.classList.remove('hidden');
+          els.previewPanel.classList.add('flex');
+          return;
+        }
+        if (view === 'edit') {
+          els.leftPanel.classList.remove('hidden');
+          els.previewPanel.classList.add('hidden');
+          els.previewPanel.classList.remove('flex');
+          els.mobileViewEdit.className = 'px-2.5 py-1 text-xs font-semibold rounded-md bg-white text-brand-600 shadow-xs transition';
+          els.mobileViewPreview.className = 'px-2.5 py-1 text-xs font-semibold rounded-md text-slate-600 transition';
+        } else {
+          els.leftPanel.classList.add('hidden');
+          els.previewPanel.classList.remove('hidden');
+          els.previewPanel.classList.add('flex');
+          els.mobileViewEdit.className = 'px-2.5 py-1 text-xs font-semibold rounded-md text-slate-600 transition';
+          els.mobileViewPreview.className = 'px-2.5 py-1 text-xs font-semibold rounded-md bg-white text-brand-600 shadow-xs transition';
+          requestAnimationFrame(() => applyZoomToRenderedPages());
+        }
+      }
+
+      /* =======================================================
+         9. 한글 IME 조합(compositionend) 대응 검색 바인딩
+      ======================================================= */
+      function bindKoreanSearchInput(inputEl, onChange) {
+        let isComposing = false;
+        const emit = () => {
+          onChange(normalizeNFC(inputEl.value));
+        };
+        inputEl.addEventListener('compositionstart', () => {
+          isComposing = true;
+        });
+        inputEl.addEventListener('compositionend', () => {
+          isComposing = false;
+          emit();
+        });
+        inputEl.addEventListener('input', () => {
+          // 조합 중에도 실시간 피드백을 주되 NFC 정규화로 누락 방지
+          emit();
+        });
+        inputEl.addEventListener('search', emit);
+      }
+
+      /* =======================================================
+         10. Local-First 악보 이미지 업로드 & 백그라운드 DB 자동 저장
+      ======================================================= */
+      function handleUploadedFiles(fileList, { addToConti = true } = {}) {
+        const imageFiles = Array.from(fileList || []).filter((f) => f && f.type && f.type.startsWith('image/'));
+        if (imageFiles.length === 0) {
+          showToast('이미지 파일(JPG, PNG, WebP 등)만 업로드할 수 있습니다.', 'warning');
+          return;
+        }
+
+        const now = Date.now();
+        const tasks = [];
+
+        imageFiles.forEach((file, idx) => {
+          const parsed = parseSheetFilename(file.name);
+          const sheetId = generateId('sheet');
+          const instantUrl = URL.createObjectURL(file);
+
+          // 1) 즉시 화면 반영을 위한 임시 URL 캐시 및 메모리 레코드 등록
+          setSheetUrls(sheetId, instantUrl, instantUrl);
+
+          const pendingRecord = {
+            id: sheetId,
+            title: parsed.title,
+            key: parsed.key,
+            memo: '',
+            blob: file,
+            thumbnailBlob: file,
+            width: 0,
+            height: 0,
+            fileSize: file.size || 0,
+            createdAt: now + idx,
+            updatedAt: now + idx
+          };
+          state.dbSheets.unshift(pendingRecord);
+
+          if (addToConti) {
+            state.conti.items.push({
+              uid: generateId('item'),
+              sheetId,
+              title: parsed.title,
+              key: parsed.key,
+              memo: ''
+            });
+          }
+
+          tasks.push({ file, sheetId, record: pendingRecord });
+        });
+
+        // 2) 기다림 없이 즉시 화면과 미리보기 렌더링 (Local-First)
+        if (addToConti) {
+          markDirty();
+          renderContiList();
+          renderPreview();
+        }
+        renderDbList();
+        showToast(
+          addToConti
+            ? `${imageFiles.length}개의 악보를 콘티에 추가했습니다. (DB 자동 최적화 저장 중)`
+            : `${imageFiles.length}개의 악보를 DB에 등록하고 있습니다.`,
+          'success'
+        );
+
+        // 3) 백그라운드에서 이미지 압축 및 IndexedDB 영구 저장
+        (async () => {
+          for (const task of tasks) {
+            try {
+              const optimized = await optimizeSheetImage(task.file);
+              const existing = state.dbSheets.find((s) => s.id === task.sheetId);
+              if (!existing) continue; // 도중 삭제된 경우 스킵
+
+              existing.blob = optimized.blob;
+              existing.thumbnailBlob = optimized.thumbnailBlob;
+              existing.width = optimized.width;
+              existing.height = optimized.height;
+              existing.fileSize = optimized.fileSize;
+              existing.updatedAt = Date.now();
+
+              setSheetUrls(task.sheetId, optimized.blob, optimized.thumbnailBlob);
+              await dbPut(STORE_SHEETS, existing);
+            } catch (err) {
+              console.warn('백그라운드 악보 압축/저장 오류:', err);
+              // 압축 실패 시 원본 Blob으로라도 안전 저장 시도
+              try {
+                const existing = state.dbSheets.find((s) => s.id === task.sheetId);
+                if (existing) await dbPut(STORE_SHEETS, existing);
+              } catch (dbErr) {
+                console.error('원본 DB 저장 실패:', dbErr);
+              }
+            }
+          }
+          renderDbList();
+          renderPreview();
+        })();
+      }
+
+      /* =======================================================
+         11. 외부 파일 드래그 앤 드롭 (내부 카드 순서 드래그와 완벽 분리)
+      ======================================================= */
+      function isExternalFileDrag(e) {
+        if (isInternalCardDragging) return false;
+        const dt = e.dataTransfer;
+        if (!dt) return false;
+        const types = Array.from(dt.types || []);
+        if (types.includes('application/x-conti-card')) return false;
+        return types.includes('Files');
+      }
+
+      function setupGlobalFileDragAndDrop() {
+        window.addEventListener('dragenter', (e) => {
+          if (!isExternalFileDrag(e)) return;
+          e.preventDefault();
+          externalDragCounter++;
+          els.globalFileDropOverlay.classList.remove('hidden');
+        });
+
+        window.addEventListener('dragover', (e) => {
+          if (!isExternalFileDrag(e)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+        });
+
+        window.addEventListener('dragleave', (e) => {
+          if (!isExternalFileDrag(e)) return;
+          e.preventDefault();
+          externalDragCounter = Math.max(0, externalDragCounter - 1);
+          if (externalDragCounter === 0) {
+            els.globalFileDropOverlay.classList.add('hidden');
+          }
+        });
+
+        window.addEventListener('drop', (e) => {
+          if (!isExternalFileDrag(e)) return;
+          e.preventDefault();
+          externalDragCounter = 0;
+          els.globalFileDropOverlay.classList.add('hidden');
+
+          if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            const addToConti = state.activeTab !== 'db';
+            handleUploadedFiles(e.dataTransfer.files, { addToConti });
+          }
+        });
+      }
+
+      /* =======================================================
+         12. TAB 1: 콘티 곡 리스트 렌더링 & 내부 드래그 앤 드롭 순서 변경
+      ======================================================= */
+      function moveContiItem(fromIndex, toIndex) {
+        if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
+        if (fromIndex >= state.conti.items.length || toIndex >= state.conti.items.length) return;
+        const [moved] = state.conti.items.splice(fromIndex, 1);
+        state.conti.items.splice(toIndex, 0, moved);
+        markDirty();
+        renderContiList();
+        renderPreview();
+      }
+
+      function removeContiItem(uid) {
+        state.conti.items = state.conti.items.filter((item) => item.uid !== uid);
+        markDirty();
+        renderContiList();
+        renderDbList();
+        renderPreview();
+      }
+
+      function renderContiList() {
+        const items = state.conti.items;
+        els.contiCountBadge.textContent = `${items.length}곡`;
+        els.btnClearContiItems.classList.toggle('hidden', items.length === 0);
+
+        if (items.length === 0) {
+          els.contiList.innerHTML = `
+            <div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 py-10 px-4 text-center">
+              <div class="w-11 h-11 mx-auto mb-2.5 rounded-xl bg-white border border-slate-200 text-slate-400 flex items-center justify-center">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
+                </svg>
+              </div>
+              <p class="text-xs font-semibold text-slate-600">콘티에 담긴 곡이 없습니다</p>
+              <p class="text-[11px] text-slate-400 mt-1">위 영역에 악보를 올리거나 [악보 DB] 탭에서 추가하세요.</p>
+            </div>
+          `;
+          return;
+        }
+
+        els.contiList.innerHTML = '';
+
+        items.forEach((item, index) => {
+          const thumbUrl = getSheetThumbUrl(item.sheetId);
+          const card = document.createElement('div');
+          card.className = 'conti-card group bg-white border border-slate-200 hover:border-brand-300 rounded-xl p-2.5 shadow-2xs transition flex items-start gap-2.5';
+          card.draggable = true;
+          card.dataset.uid = item.uid;
+          card.dataset.index = String(index);
+
+          card.innerHTML = `
+            <!-- 드래그 핸들 & 순서 번호 -->
+            <div class="flex flex-col items-center justify-between self-stretch py-0.5 text-slate-400 cursor-grab active:cursor-grabbing shrink-0" title="드래그하여 순서 변경">
+              <span class="w-5 h-5 rounded-md bg-brand-50 text-brand-700 text-[11px] font-bold flex items-center justify-center">${index + 1}</span>
+              <svg class="w-4 h-4 my-1 opacity-60 group-hover:opacity-100" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 9h8M8 15h8" />
+              </svg>
+            </div>
+
+            <!-- 썸네일 (클릭 시 확대) -->
+            <button type="button" class="btn-zoom-thumb w-12 h-16 rounded-lg border border-slate-200 bg-slate-100 overflow-hidden shrink-0 flex items-center justify-center hover:ring-2 hover:ring-brand-300 transition cursor-pointer" title="악보 크게 보기">
+              ${
+                thumbUrl
+                  ? `<img src="${thumbUrl}" alt="${escapeHtml(item.title)}" class="w-full h-full object-cover" />`
+                  : `<span class="text-[10px] text-rose-400 font-semibold text-center leading-tight px-1">이미지<br/>없음</span>`
+              }
+            </button>
+
+            <!-- 인라인 편집 영역 (곡 제목, 코드, 메모) -->
+            <div class="flex-1 min-w-0 space-y-1.5">
+              <div class="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value="${escapeHtml(item.title)}"
+                  placeholder="곡 제목"
+                  class="input-item-title flex-1 min-w-0 text-xs sm:text-sm font-semibold text-slate-800 bg-slate-50 hover:bg-white focus:bg-white border border-transparent hover:border-slate-200 focus:border-brand-500 rounded-md px-2 py-1 outline-none transition select-text"
+                />
+                <input
+                  type="text"
+                  list="chord-keys-list"
+                  value="${escapeHtml(item.key)}"
+                  placeholder="코드"
+                  class="input-item-key w-14 shrink-0 text-center text-xs font-bold text-brand-700 bg-brand-50/70 hover:bg-brand-50 focus:bg-white border border-brand-200/70 focus:border-brand-500 rounded-md px-1.5 py-1 outline-none transition select-text"
+                />
+              </div>
+              <input
+                type="text"
+                value="${escapeHtml(item.memo)}"
+                placeholder="짧은 메모 (예: 전주 4마디, 후렴 반복, 브릿지 후 전조)"
+                class="input-item-memo w-full text-[11px] text-slate-600 bg-slate-50/70 hover:bg-white focus:bg-white border border-transparent hover:border-slate-200 focus:border-brand-500 rounded-md px-2 py-1 outline-none transition select-text"
+              />
+            </div>
+
+            <!-- 보조 순서 이동 및 삭제 버튼 -->
+            <div class="flex flex-col items-center gap-0.5 shrink-0">
+              <button type="button" class="btn-move-up p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-25 disabled:pointer-events-none transition" ${index === 0 ? 'disabled' : ''} title="위로 이동">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7" /></svg>
+              </button>
+              <button type="button" class="btn-move-down p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-25 disabled:pointer-events-none transition" ${index === items.length - 1 ? 'disabled' : ''} title="아래로 이동">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
+              </button>
+              <button type="button" class="btn-delete-item p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition" title="콘티에서 제거">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+          `;
+
+          // 입력란 포커스 중에는 드래그 방해 방지
+          const inputs = card.querySelectorAll('input');
+          inputs.forEach((inp) => {
+            inp.addEventListener('focus', () => { card.draggable = false; });
+            inp.addEventListener('blur', () => { card.draggable = true; });
+          });
+
+          // 인라인 수정 이벤트
+          card.querySelector('.input-item-title').addEventListener('input', (e) => {
+            item.title = normalizeNFC(e.target.value);
+            markDirty();
+            renderPreview();
+          });
+          card.querySelector('.input-item-key').addEventListener('input', (e) => {
+            item.key = normalizeNFC(e.target.value);
+            markDirty();
+            renderPreview();
+          });
+          card.querySelector('.input-item-memo').addEventListener('input', (e) => {
+            item.memo = normalizeNFC(e.target.value);
+            markDirty();
+            renderPreview();
+          });
+
+          // 버튼 이벤트
+          card.querySelector('.btn-zoom-thumb').addEventListener('click', () => openSheetZoomModal(item.sheetId, item.title));
+          card.querySelector('.btn-move-up').addEventListener('click', () => moveContiItem(index, index - 1));
+          card.querySelector('.btn-move-down').addEventListener('click', () => moveContiItem(index, index + 1));
+          card.querySelector('.btn-delete-item').addEventListener('click', () => removeContiItem(item.uid));
+
+          // 내부 드래그 앤 드롭 순서 변경 이벤트
+          card.addEventListener('dragstart', (e) => {
+            isInternalCardDragging = true;
+            draggingCardUid = item.uid;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('application/x-conti-card', item.uid);
+            requestAnimationFrame(() => card.classList.add('is-dragging'));
+          });
+
+          card.addEventListener('dragend', () => {
+            isInternalCardDragging = false;
+            draggingCardUid = null;
+            card.classList.remove('is-dragging');
+            els.contiList.querySelectorAll('.conti-card').forEach((c) => {
+              c.classList.remove('drag-over-top', 'drag-over-bottom');
+            });
+          });
+
+          card.addEventListener('dragover', (e) => {
+            if (!isInternalCardDragging || draggingCardUid === item.uid) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            const rect = card.getBoundingClientRect();
+            const isUpperHalf = e.clientY < rect.top + rect.height / 2;
+            card.classList.toggle('drag-over-top', isUpperHalf);
+            card.classList.toggle('drag-over-bottom', !isUpperHalf);
+          });
+
+          card.addEventListener('dragleave', () => {
+            card.classList.remove('drag-over-top', 'drag-over-bottom');
+          });
+
+          card.addEventListener('drop', (e) => {
+            if (!isInternalCardDragging) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const rect = card.getBoundingClientRect();
+            const isUpperHalf = e.clientY < rect.top + rect.height / 2;
+            card.classList.remove('drag-over-top', 'drag-over-bottom');
+
+            const fromIdx = state.conti.items.findIndex((x) => x.uid === draggingCardUid);
+            let toIdx = state.conti.items.findIndex((x) => x.uid === item.uid);
+            if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+
+            const [moved] = state.conti.items.splice(fromIdx, 1);
+            // 제거 후 대상 인덱스 재계산
+            toIdx = state.conti.items.findIndex((x) => x.uid === item.uid);
+            const insertIdx = isUpperHalf ? toIdx : toIdx + 1;
+            state.conti.items.splice(insertIdx, 0, moved);
+
+            isInternalCardDragging = false;
+            draggingCardUid = null;
+            markDirty();
+            renderContiList();
+            renderPreview();
+          });
+
+          els.contiList.appendChild(card);
+        });
+      }
+
+      /* =======================================================
+         13. TAB 2: 악보 DB 검색, 재사용, 수정 및 삭제
+      ======================================================= */
+      function addSheetFromDbToConti(sheet) {
+        state.conti.items.push({
+          uid: generateId('item'),
+          sheetId: sheet.id,
+          title: normalizeNFC(sheet.title),
+          key: normalizeNFC(sheet.key),
+          memo: normalizeNFC(sheet.memo)
+        });
+        markDirty();
+        renderContiList();
+        renderDbList();
+        renderPreview();
+        showToast(`'${sheet.title}' 악보를 콘티에 추가했습니다.`, 'success');
+      }
+
+      function openEditDbSheetModal(sheet) {
+        openModal({
+          title: '악보 DB 정보 수정',
+          bodyHtml: `
+            <div class="space-y-3">
+              <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">곡 제목</label>
+                <input id="edit-db-title" type="text" value="${escapeHtml(sheet.title)}" class="w-full text-sm border border-slate-200 focus:border-brand-500 rounded-lg px-3 py-2 outline-none" />
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">코드 (Key)</label>
+                <input id="edit-db-key" type="text" list="chord-keys-list" value="${escapeHtml(sheet.key)}" placeholder="예: G, Bb, F#m" class="w-full text-sm border border-slate-200 focus:border-brand-500 rounded-lg px-3 py-2 outline-none" />
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">기본 메모</label>
+                <input id="edit-db-memo" type="text" value="${escapeHtml(sheet.memo)}" placeholder="예: 템포 72, 원키" class="w-full text-sm border border-slate-200 focus:border-brand-500 rounded-lg px-3 py-2 outline-none" />
+              </div>
+            </div>
+          `,
+          buttons: [
+            { label: '취소', variant: 'secondary', onClick: closeModal },
+            {
+              label: '저장',
+              variant: 'primary',
+              onClick: async () => {
+                const newTitle = normalizeNFC(document.getElementById('edit-db-title').value.trim()) || '제목 없는 악보';
+                const newKey = normalizeNFC(document.getElementById('edit-db-key').value.trim());
+                const newMemo = normalizeNFC(document.getElementById('edit-db-memo').value.trim());
+
+                sheet.title = newTitle;
+                sheet.key = newKey;
+                sheet.memo = newMemo;
+                sheet.updatedAt = Date.now();
+
+                try {
+                  await dbPut(STORE_SHEETS, sheet);
+                  renderDbList();
+                  closeModal();
+                  showToast('악보 정보를 수정했습니다.', 'success');
+                } catch (err) {
+                  console.error(err);
+                  showToast('악보 정보 저장 중 오류가 발생했습니다.', 'error');
+                }
+              }
+            }
+          ],
+          onMount: () => {
+            const input = document.getElementById('edit-db-title');
+            if (input) input.focus();
+          }
+        });
+      }
+
+      async function deleteDbSheet(sheet) {
+        const ok = await confirmDialog({
+          title: '악보 DB에서 삭제',
+          message: `'${sheet.title}' 악보를 데이터베이스에서 영구 삭제하시겠습니까?\n이 악보를 참조하는 저장된 콘티에서는 이미지가 표시되지 않을 수 있습니다.`,
+          confirmLabel: '삭제',
+          confirmVariant: 'danger'
+        });
+        if (!ok) return;
+
+        try {
+          await dbDelete(STORE_SHEETS, sheet.id);
+          state.dbSheets = state.dbSheets.filter((s) => s.id !== sheet.id);
+          revokeSheetUrls(sheet.id);
+          renderDbList();
+          renderContiList();
+          renderPreview();
+          showToast('악보를 DB에서 삭제했습니다.', 'info');
+        } catch (err) {
+          console.error(err);
+          showToast('악보 삭제 중 오류가 발생했습니다.', 'error');
+        }
+      }
+
+      function renderDbList() {
+        const totalBytes = state.dbSheets.reduce((sum, s) => sum + (s.fileSize || 0), 0);
+        els.tabDbCount.textContent = String(state.dbSheets.length);
+        els.dbTotalCount.textContent = String(state.dbSheets.length);
+        els.dbTotalSize.textContent = formatBytes(totalBytes);
+        els.dbSearchClear.classList.toggle('hidden', !state.dbSearchQuery);
+
+        const qNorm = normalizeForSearch(state.dbSearchQuery);
+        const filtered = qNorm
+          ? state.dbSheets.filter((s) => {
+              const target = normalizeForSearch(`${s.title} ${s.key} ${s.memo}`);
+              return target.includes(qNorm);
+            })
+          : state.dbSheets;
+
+        if (filtered.length === 0) {
+          els.dbList.innerHTML = `
+            <div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 py-10 px-4 text-center">
+              <p class="text-xs font-semibold text-slate-600">${
+                qNorm ? '검색 조건에 맞는 악보가 없습니다.' : '저장된 악보가 아직 없습니다.'
+              }</p>
+              <p class="text-[11px] text-slate-400 mt-1">${
+                qNorm ? '다른 곡 제목, 코드, 메모로 검색해 보세요.' : '악보를 업로드하면 자동으로 용량을 최적화해 DB에 저장됩니다.'
+              }</p>
+            </div>
+          `;
+          return;
+        }
+
+        const inContiSheetIds = new Set(state.conti.items.map((i) => i.sheetId));
+        els.dbList.innerHTML = '';
+
+        filtered.forEach((sheet) => {
+          const thumbUrl = getSheetThumbUrl(sheet.id);
+          const isInConti = inContiSheetIds.has(sheet.id);
+          const row = document.createElement('div');
+          row.className = 'bg-white border border-slate-200 hover:border-brand-300 rounded-xl p-2.5 flex items-center gap-2.5 shadow-2xs transition';
+
+          row.innerHTML = `
+            <button type="button" class="btn-db-zoom w-11 h-14 rounded-lg border border-slate-200 bg-slate-100 overflow-hidden shrink-0 hover:ring-2 hover:ring-brand-300 transition cursor-pointer" title="미리보기">
+              ${thumbUrl ? `<img src="${thumbUrl}" alt="${escapeHtml(sheet.title)}" class="w-full h-full object-cover" />` : ''}
+            </button>
+
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-1.5">
+                <span class="text-xs sm:text-sm font-semibold text-slate-800 truncate">${escapeHtml(sheet.title)}</span>
+                ${
+                  sheet.key
+                    ? `<span class="shrink-0 px-1.5 py-0.5 rounded bg-brand-50 text-brand-700 border border-brand-200/70 text-[10px] font-bold">${escapeHtml(sheet.key)}</span>`
+                    : ''
+                }
+              </div>
+              <div class="text-[11px] text-slate-500 truncate mt-0.5">
+                ${sheet.memo ? escapeHtml(sheet.memo) : '<span class="text-slate-400">메모 없음</span>'}
+                <span class="mx-1 text-slate-300">·</span>
+                <span class="text-slate-400">${formatBytes(sheet.fileSize)}</span>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-1 shrink-0">
+              <button type="button" class="btn-db-add px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                isInConti
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                  : 'bg-brand-600 text-white hover:bg-brand-700'
+              }" title="현재 콘티에 추가">
+                ${isInConti ? '+ 또 추가' : '+ 추가'}
+              </button>
+              <button type="button" class="btn-db-edit p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer" title="정보 수정">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+              </button>
+              <button type="button" class="btn-db-del p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer" title="DB에서 삭제">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+              </button>
+            </div>
+          `;
+
+          row.querySelector('.btn-db-zoom').addEventListener('click', () => openSheetZoomModal(sheet.id, sheet.title));
+          row.querySelector('.btn-db-add').addEventListener('click', () => addSheetFromDbToConti(sheet));
+          row.querySelector('.btn-db-edit').addEventListener('click', () => openEditDbSheetModal(sheet));
+          row.querySelector('.btn-db-del').addEventListener('click', () => deleteDbSheet(sheet));
+
+          els.dbList.appendChild(row);
+        });
+      }
+
+      /* =======================================================
+         14. TAB 3: 콘티 관리 (저장 / 다른 이름 저장 / 새 콘티 / 불러오기 / 복제 / 삭제)
+      ======================================================= */
+      async function saveCurrentConti({ asNew = false, customTitle = null } = {}) {
+        const title = normalizeNFC((customTitle ?? state.conti.title).trim()) || `${state.conti.date || getTodayDateString()} 찬양 콘티`;
+        const now = Date.now();
+        const contiId = asNew || !state.conti.id ? generateId('conti') : state.conti.id;
+        const existing = state.dbContis.find((c) => c.id === contiId);
+
+        // 이미지 원본을 중복 저장하지 않고 악보 DB ID 참조만 가볍게 저장
+        const record = {
+          id: contiId,
+          title,
+          date: state.conti.date || getTodayDateString(),
+          items: state.conti.items.map((item) => ({
+            sheetId: item.sheetId,
+            title: normalizeNFC(item.title),
+            key: normalizeNFC(item.key),
+            memo: normalizeNFC(item.memo)
+          })),
+          layout: { ...createDefaultLayout(), ...state.conti.layout },
+          createdAt: existing ? existing.createdAt : now,
+          updatedAt: now
+        };
+
+        try {
+          await dbPut(STORE_CONTIS, record);
+          state.conti.id = contiId;
+          state.conti.title = title;
+          state.isDirty = false;
+
+          const idx = state.dbContis.findIndex((c) => c.id === contiId);
+          if (idx >= 0) {
+            state.dbContis[idx] = record;
+          } else {
+            state.dbContis.unshift(record);
+          }
+          state.dbContis.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+          renderHeaderStatus();
+          renderSavedContiList();
+          renderPreview();
+          showToast(`'${title}' 콘티를 저장했습니다.`, 'success');
+        } catch (err) {
+          console.error('콘티 저장 실패:', err);
+          showToast('콘티 저장 중 오류가 발생했습니다.', 'error');
+        }
+      }
+
+      function openSaveAsModal() {
+        const defaultName = `${state.conti.title || '찬양 콘티'} (복사본)`;
+        openModal({
+          title: '다른 이름으로 콘티 저장',
+          bodyHtml: `
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold text-slate-600">새 콘티 제목</label>
+              <input id="save-as-title-input" type="text" value="${escapeHtml(defaultName)}" class="w-full text-sm border border-slate-200 focus:border-brand-500 rounded-lg px-3 py-2 outline-none" />
+            </div>
+          `,
+          buttons: [
+            { label: '취소', variant: 'secondary', onClick: closeModal },
+            {
+              label: '새 콘티로 저장',
+              variant: 'primary',
+              onClick: async () => {
+                const val = document.getElementById('save-as-title-input').value.trim();
+                closeModal();
+                await saveCurrentConti({ asNew: true, customTitle: val || defaultName });
+              }
+            }
+          ],
+          onMount: () => {
+            const inp = document.getElementById('save-as-title-input');
+            if (inp) {
+              inp.focus();
+              inp.select();
+            }
+          }
+        });
+      }
+
+      async function createNewConti() {
+        if (state.isDirty) {
+          const ok = await confirmDialog({
+            title: '저장하지 않은 변경사항',
+            message: '현재 작업 중인 콘티에 저장하지 않은 변경사항이 있습니다.\n저장하지 않고 새 콘티를 만드시겠습니까?',
+            confirmLabel: '새 콘티 만들기',
+            confirmVariant: 'danger'
+          });
+          if (!ok) return;
+        }
+        state.conti = createFreshConti();
+        state.isDirty = false;
+        renderHeaderStatus();
+        syncLayoutControlsFromState();
+        renderContiList();
+        renderDbList();
+        renderSavedContiList();
+        renderPreview();
+        switchTab('conti');
+        showToast('새 콘티 문서를 열었습니다.', 'info');
+      }
+
+      async function loadSavedConti(saved) {
+        if (state.isDirty) {
+          const ok = await confirmDialog({
+            title: '저장하지 않은 변경사항',
+            message: `현재 편집 중인 내용을 버리고 '${saved.title}' 콘티를 불러오시겠습니까?`,
+            confirmLabel: '불러오기',
+            confirmVariant: 'primary'
+          });
+          if (!ok) return;
+        }
+
+        state.conti = {
+          id: saved.id,
+          title: normalizeNFC(saved.title),
+          date: saved.date || getTodayDateString(),
+          items: (saved.items || []).map((item) => ({
+            uid: generateId('item'),
+            sheetId: item.sheetId,
+            title: normalizeNFC(item.title),
+            key: normalizeNFC(item.key),
+            memo: normalizeNFC(item.memo)
+          })),
+          layout: { ...createDefaultLayout(), ...(saved.layout || {}) }
+        };
+        state.isDirty = false;
+
+        renderHeaderStatus();
+        syncLayoutControlsFromState();
+        renderContiList();
+        renderDbList();
+        renderSavedContiList();
+        renderPreview();
+        switchTab('conti');
+
+        // 누락된 악보 ID 확인 안내
+        const missingCount = state.conti.items.filter((i) => !state.dbSheets.some((s) => s.id === i.sheetId)).length;
+        if (missingCount > 0) {
+          showToast(`콘티를 불러왔으나 DB에서 삭제된 악보 ${missingCount}건이 있습니다.`, 'warning');
+        } else {
+          showToast(`'${saved.title}' 콘티를 불러왔습니다.`, 'success');
+        }
+      }
+
+      async function duplicateSavedConti(saved) {
+        const now = Date.now();
+        const copy = {
+          ...saved,
+          id: generateId('conti'),
+          title: normalizeNFC(`${saved.title} (사본)`),
+          items: (saved.items || []).map((i) => ({ ...i })),
+          layout: { ...createDefaultLayout(), ...(saved.layout || {}) },
+          createdAt: now,
+          updatedAt: now
+        };
+        try {
+          await dbPut(STORE_CONTIS, copy);
+          state.dbContis.unshift(copy);
+          renderSavedContiList();
+          showToast(`'${copy.title}'으로 복제했습니다.`, 'success');
+        } catch (err) {
+          console.error(err);
+          showToast('콘티 복제 중 오류가 발생했습니다.', 'error');
+        }
+      }
+
+      async function deleteSavedConti(saved) {
+        const ok = await confirmDialog({
+          title: '저장된 콘티 삭제',
+          message: `'${saved.title}' 콘티를 삭제하시겠습니까?\n(악보 DB에 저장된 개별 악보 이미지는 삭제되지 않습니다.)`,
+          confirmLabel: '삭제',
+          confirmVariant: 'danger'
+        });
+        if (!ok) return;
+
+        try {
+          await dbDelete(STORE_CONTIS, saved.id);
+          state.dbContis = state.dbContis.filter((c) => c.id !== saved.id);
+          if (state.conti.id === saved.id) {
+            state.conti.id = null;
+            state.isDirty = true;
+            renderHeaderStatus();
+          }
+          renderSavedContiList();
+          showToast('콘티를 삭제했습니다.', 'info');
+        } catch (err) {
+          console.error(err);
+          showToast('콘티 삭제 중 오류가 발생했습니다.', 'error');
+        }
+      }
+
+      function renderSavedContiList() {
+        const qNorm = normalizeForSearch(state.contiSearchQuery);
+        const filtered = qNorm
+          ? state.dbContis.filter((c) => {
+              const songsText = (c.items || []).map((i) => `${i.title} ${i.key}`).join(' ');
+              const target = normalizeForSearch(`${c.title} ${c.date} ${songsText}`);
+              return target.includes(qNorm);
+            })
+          : state.dbContis;
+
+        if (filtered.length === 0) {
+          els.savedContiList.innerHTML = `
+            <div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 py-10 px-4 text-center">
+              <p class="text-xs font-semibold text-slate-600">${
+                qNorm ? '검색된 콘티가 없습니다.' : '저장된 콘티가 없습니다.'
+              }</p>
+              <p class="text-[11px] text-slate-400 mt-1">${
+                qNorm ? '다른 제목이나 날짜, 곡명으로 검색해 보세요.' : '작업한 콘티를 [현재 저장] 버튼으로 저장해 두고 언제든 불러오세요.'
+              }</p>
+            </div>
+          `;
+          return;
+        }
+
+        els.savedContiList.innerHTML = '';
+
+        filtered.forEach((saved) => {
+          const isCurrent = state.conti.id === saved.id;
+          const card = document.createElement('div');
+          card.className = `rounded-xl border p-3 transition shadow-2xs ${
+            isCurrent ? 'border-brand-400 bg-brand-50/40' : 'border-slate-200 bg-white hover:border-slate-300'
+          }`;
+
+          const songPreview = (saved.items || [])
+            .slice(0, 4)
+            .map((i) => `${i.title}${i.key ? `(${i.key})` : ''}`)
+            .join(' · ');
+
+          card.innerHTML = `
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-xs sm:text-sm font-bold text-slate-800 truncate">${escapeHtml(saved.title)}</span>
+                  ${isCurrent ? '<span class="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-brand-600 text-white">편집 중</span>' : ''}
+                </div>
+                <div class="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1.5">
+                  <span>${escapeHtml(saved.date || '-')}</span>
+                  <span class="text-slate-300">·</span>
+                  <span>${(saved.items || []).length}곡</span>
+                  <span class="text-slate-300">·</span>
+                  <span>A4 ${saved.layout?.orientation === 'landscape' ? '가로' : '세로'} ${saved.layout?.perPage || 2}열</span>
+                </div>
+              </div>
+            </div>
+
+            ${
+              songPreview
+                ? `<p class="text-[11px] text-slate-500 truncate mt-2 pt-2 border-t border-slate-100">${escapeHtml(songPreview)}${
+                    saved.items.length > 4 ? ` 외 ${saved.items.length - 4}곡` : ''
+                  }</p>`
+                : ''
+            }
+
+            <div class="flex items-center justify-end gap-1.5 mt-2.5">
+              <button type="button" class="btn-conti-load px-2.5 py-1 rounded-lg text-xs font-semibold bg-brand-600 hover:bg-brand-700 text-white transition cursor-pointer">불러오기</button>
+              <button type="button" class="btn-conti-dup px-2.5 py-1 rounded-lg text-xs font-medium bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 transition cursor-pointer">복제</button>
+              <button type="button" class="btn-conti-del px-2 py-1 rounded-lg text-xs font-medium text-rose-600 hover:bg-rose-50 transition cursor-pointer">삭제</button>
+            </div>
+          `;
+
+          card.querySelector('.btn-conti-load').addEventListener('click', () => loadSavedConti(saved));
+          card.querySelector('.btn-conti-dup').addEventListener('click', () => duplicateSavedConti(saved));
+          card.querySelector('.btn-conti-del').addEventListener('click', () => deleteSavedConti(saved));
+
+          els.savedContiList.appendChild(card);
+        });
+      }
+
+      /* =======================================================
+         15. TAB 4: 레이아웃 컨트롤 동기화 및 @page 동적 반영
+      ======================================================= */
+      function updateDynamicPageCSS() {
+        const isLandscape = state.conti.layout.orientation === 'landscape';
+        document.documentElement.style.setProperty('--a4-w', isLandscape ? '297mm' : '210mm');
+        document.documentElement.style.setProperty('--a4-h', isLandscape ? '210mm' : '297mm');
+        els.dynamicPageStyle.textContent = `@page { size: A4 ${isLandscape ? 'landscape' : 'portrait'}; margin: 0; }`;
+      }
+
+      function syncLayoutControlsFromState() {
+        const L = state.conti.layout;
+        updateDynamicPageCSS();
+
+        // 방향 버튼 상태
+        els.orientationBtns.forEach((btn) => {
+          const active = btn.dataset.orientation === L.orientation;
+          btn.classList.toggle('border-brand-600', active);
+          btn.classList.toggle('bg-brand-50/70', active);
+          btn.classList.toggle('text-brand-700', active);
+          btn.classList.toggle('shadow-2xs', active);
+          btn.classList.toggle('border-slate-200', !active);
+          btn.classList.toggle('bg-white', !active);
+          btn.classList.toggle('text-slate-600', !active);
+        });
+
+        // 페이지당 곡 수 버튼 상태
+        els.perpageBtns.forEach((btn) => {
+          const active = Number(btn.dataset.perpage) === Number(L.perPage);
+          btn.classList.toggle('border-brand-600', active);
+          btn.classList.toggle('bg-brand-50/70', active);
+          btn.classList.toggle('text-brand-700', active);
+          btn.classList.toggle('shadow-2xs', active);
+          btn.classList.toggle('border-slate-200', !active);
+          btn.classList.toggle('bg-white', !active);
+          btn.classList.toggle('text-slate-600', !active);
+        });
+
+        // 토글 스위치 및 ON/OFF 텍스트 동기화
+        els.toggleShowHeader.checked = !!L.showHeader;
+        els.statusShowHeader.textContent = L.showHeader ? 'ON' : 'OFF';
+        els.statusShowHeader.className = `text-[10px] font-bold w-6 text-right ${L.showHeader ? 'text-brand-600' : 'text-slate-400'}`;
+
+        // 상단 제목 글자 크기 컨트롤 활성/비활성
+        const headerFontSize = Number(L.headerFontSize) || 10;
+        els.rangeHeaderFontSize.value = String(headerFontSize);
+        els.rangeHeaderFontSize.disabled = !L.showHeader;
+        els.valHeaderFontSize.textContent = `${headerFontSize} px`;
+        els.headerFontSizeControl.classList.toggle('opacity-45', !L.showHeader);
+        els.headerFontSizeControl.classList.toggle('pointer-events-none', !L.showHeader);
+
+        els.toggleGrayscale.checked = !!L.grayscale;
+        els.statusGrayscale.textContent = L.grayscale ? 'ON' : 'OFF';
+        els.statusGrayscale.className = `text-[10px] font-bold w-6 text-right ${L.grayscale ? 'text-brand-600' : 'text-slate-400'}`;
+
+        // 슬라이더 값 동기화
+        els.rangeMargin.value = String(L.marginMm);
+        els.valMargin.textContent = `${L.marginMm} mm`;
+
+        els.rangeGap.value = String(L.gapMm);
+        els.valGap.textContent = `${L.gapMm} mm`;
+
+        els.rangeContrast.value = String(L.contrast);
+        els.valContrast.textContent = `${L.contrast}%`;
+
+        els.rangeBrightness.value = String(L.brightness);
+        els.valBrightness.textContent = `${L.brightness}%`;
+      }
+
+      /* =======================================================
+         16. 실시간 A4 미리보기 렌더링 및 자동 맞춤 줌 계산
+      ======================================================= */
+      function getA4BasePx() {
+        const isLandscape = state.conti.layout.orientation === 'landscape';
+        const pxPerMm = 96 / 25.4;
+        return {
+          width: (isLandscape ? 297 : 210) * pxPerMm,
+          height: (isLandscape ? 210 : 297) * pxPerMm
+        };
+      }
+
+      function applyZoomToRenderedPages() {
+        const base = getA4BasePx();
+        const viewportW = Math.max(260, els.previewScrollViewport.clientWidth - 48);
+
+        let scale = state.zoomScale;
+        if (state.zoomMode === 'fit') {
+          scale = Math.min(1.05, Math.max(0.25, viewportW / base.width));
+          state.zoomScale = scale;
+          els.zoomLabel.textContent = `자동 (${Math.round(scale * 100)}%)`;
+        } else {
+          els.zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+        }
+
+        const scaledW = Math.round(base.width * scale);
+        const scaledH = Math.round(base.height * scale);
+
+        els.previewPagesContainer.querySelectorAll('.a4-scale-box').forEach((box) => {
+          box.style.width = `${scaledW}px`;
+          box.style.height = `${scaledH}px`;
+          const sheet = box.querySelector('.a4-sheet');
+          if (sheet) {
+            sheet.style.transformOrigin = 'top left';
+            sheet.style.transform = `scale(${scale})`;
+          }
+        });
+      }
+
+      function renderPreview() {
+        updateDynamicPageCSS();
+        const items = state.conti.items;
+        const L = state.conti.layout;
+        const perPage = Number(L.perPage) || 1;
+        const orientLabel = L.orientation === 'landscape' ? 'A4 가로' : 'A4 세로';
+
+        if (items.length === 0) {
+          els.previewSummaryText.textContent = `${orientLabel} · 페이지당 ${perPage}곡 · 0페이지`;
+          els.previewPagesContainer.innerHTML = `
+            <div class="my-auto py-16 px-8 text-center max-w-sm">
+              <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-white border border-slate-200 shadow-sm text-brand-500 flex items-center justify-center">
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+              <h3 class="text-sm sm:text-base font-bold text-slate-700">실시간 A4 미리보기 대기 중</h3>
+              <p class="text-xs text-slate-500 mt-1.5 leading-relaxed">왼쪽 패널에서 악보 이미지를 추가하거나<br/>화면 아무 곳에 드래그해 놓으면 A4 용지에 자동 배치됩니다.</p>
+            </div>
+          `;
+          return;
+        }
+
+        const pages = [];
+        for (let i = 0; i < items.length; i += perPage) {
+          pages.push(items.slice(i, i + perPage));
+        }
+
+        els.previewSummaryText.textContent = `${orientLabel} · 페이지당 ${perPage}열 · 총 ${pages.length}페이지 (${items.length}곡)`;
+        els.previewPagesContainer.innerHTML = '';
+
+        const imgFilter = [
+          L.grayscale ? 'grayscale(100%)' : '',
+          `contrast(${L.contrast}%)`,
+          `brightness(${L.brightness}%)`
+        ].filter(Boolean).join(' ');
+
+        const headerFontSize = Number(L.headerFontSize) || 10;
+
+        pages.forEach((pageItems, pageIndex) => {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'a4-page-wrapper flex flex-col items-center';
+
+          const metaBadge = document.createElement('div');
+          metaBadge.className = 'a4-page-meta-badge mb-1.5 text-[11px] font-semibold text-slate-500 flex items-center gap-2';
+          metaBadge.innerHTML = `<span>페이지 ${pageIndex + 1} / ${pages.length}</span>`;
+          wrapper.appendChild(metaBadge);
+
+          const scaleBox = document.createElement('div');
+          scaleBox.className = 'a4-scale-box relative shadow-xl ring-1 ring-slate-300/80 bg-white overflow-hidden';
+
+          const sheet = document.createElement('div');
+          sheet.className = 'a4-sheet';
+          sheet.style.padding = `${L.marginMm}mm`;
+
+          // 1) 초소형 상단 예배 제목 1줄 (ON/OFF 및 글자 크기 반영)
+          if (L.showHeader) {
+            const headerEl = document.createElement('div');
+            headerEl.className = 'shrink-0 flex items-baseline justify-between gap-2 border-b border-slate-300 pb-[1mm] mb-[1.4mm] leading-tight';
+            headerEl.style.fontSize = `${headerFontSize}px`;
+            headerEl.innerHTML = `
+              <div class="truncate">
+                <span class="font-semibold text-slate-700">${escapeHtml(state.conti.title || '찬양 콘티')}</span>
+                ${state.conti.date ? `<span class="font-normal text-slate-500 ml-1">(${escapeHtml(state.conti.date)})</span>` : ''}
+              </div>
+              <span class="shrink-0 font-medium text-slate-400">${pageIndex + 1} / ${pages.length}</span>
+            `;
+            sheet.appendChild(headerEl);
+          }
+
+          // 2) 가로 병렬 그리드 (1열 / 2열 / 3열)
+          const gridEl = document.createElement('div');
+          gridEl.className = 'flex-1 min-h-0 grid';
+          gridEl.style.gridTemplateColumns = `repeat(${perPage}, minmax(0, 1fr))`;
+          gridEl.style.columnGap = `${L.gapMm}mm`;
+
+          pageItems.forEach((item) => {
+            const imgUrl = getSheetImageUrl(item.sheetId);
+
+            const slot = document.createElement('div');
+            slot.className = 'min-w-0 min-h-0 flex flex-col overflow-hidden';
+
+            // 악보 이미지 프레임 (비율 유지 최대 면적)
+            const imgWrap = document.createElement('div');
+            imgWrap.className = 'flex-1 min-h-0 w-full flex items-center justify-center overflow-hidden';
+            if (imgUrl) {
+              const imgEl = document.createElement('img');
+              imgEl.src = imgUrl;
+              imgEl.alt = item.title || '악보';
+              imgEl.className = 'w-full h-full object-contain block';
+              imgEl.style.filter = imgFilter;
+              imgWrap.appendChild(imgEl);
+            } else {
+              imgWrap.innerHTML = `
+                <div class="w-full h-full border border-dashed border-rose-200 bg-rose-50/50 rounded-lg flex flex-col items-center justify-center text-rose-400 text-xs p-3 text-center">
+                  <span class="font-semibold">악보 이미지를 찾을 수 없음</span>
+                  <span class="text-[10px] mt-0.5">DB에서 삭제된 악보입니다</span>
+                </div>
+              `;
+            }
+
+            slot.appendChild(imgWrap);
+            gridEl.appendChild(slot);
+          });
+
+          sheet.appendChild(gridEl);
+          scaleBox.appendChild(sheet);
+          wrapper.appendChild(scaleBox);
+          els.previewPagesContainer.appendChild(wrapper);
+        });
+
+        applyZoomToRenderedPages();
+      }
+
+      /* =======================================================
+         17. 공용 모달 닫기 이벤트 바인딩
+      ======================================================= */
+      els.modalCloseX.addEventListener('click', closeModal);
+      els.modalBackdrop.addEventListener('click', (e) => {
+        if (e.target === els.modalBackdrop) closeModal();
+      });
+
+      /* =======================================================
+         18. 인쇄 및 A4 PDF 직접 생성/다운로드 엔진
+      ======================================================= */
+      function loadImageFromUrl(url) {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error('이미지를 불러올 수 없습니다.'));
+          img.src = url;
+        });
+      }
+
+      /**
+       * 현재 A4 레이아웃 설정(방향, 열 수, 제목/글자크기, 라벨, 여백/간격, 필터)을
+       * 200 DPI 고해상도 캔버스에 그대로 그려 PDF 페이지로 변환할 수 있게 합니다.
+       */
+      async function renderA4PageToCanvas(pageItems, pageIndex, totalPages) {
+        const L = state.conti.layout;
+        const isLandscape = L.orientation === 'landscape';
+        const perPage = Number(L.perPage) || 1;
+
+        const pageMmW = isLandscape ? 297 : 210;
+        const pageMmH = isLandscape ? 210 : 297;
+        const DPI = 200;
+        const pxPerMm = DPI / 25.4;
+        const cssPxToCanvas = DPI / 96;
+
+        const canvasW = Math.round(pageMmW * pxPerMm);
+        const canvasH = Math.round(pageMmH * pxPerMm);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = canvasW;
+        canvas.height = canvasH;
+        const ctx = canvas.getContext('2d');
+
+        // 흰색 용지 배경
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvasW, canvasH);
+
+        const marginPx = (Number(L.marginMm) || 0) * pxPerMm;
+        const gapPx = (Number(L.gapMm) || 0) * pxPerMm;
+
+        let curY = marginPx;
+        const contentW = canvasW - marginPx * 2;
+        const fontFamily = 'Pretendard, Inter, -apple-system, BlinkMacSystemFont, sans-serif';
+
+        // 1) 상단 예배 제목 1줄 렌더링
+        if (L.showHeader) {
+          const headerFontPx = (Number(L.headerFontSize) || 10) * cssPxToCanvas;
+          const lineH = headerFontPx * 1.25;
+          const titleText = state.conti.title ? state.conti.title : '찬양 콘티';
+          const dateText = state.conti.date ? ` (${state.conti.date})` : '';
+          const pageText = `${pageIndex + 1} / ${totalPages}`;
+
+          ctx.save();
+          ctx.textBaseline = 'top';
+
+          // 오른쪽 쪽수
+          ctx.font = `500 ${headerFontPx}px ${fontFamily}`;
+          ctx.fillStyle = '#94a3b8';
+          const pageTextW = ctx.measureText(pageText).width;
+          ctx.fillText(pageText, marginPx + contentW - pageTextW, curY);
+
+          // 왼쪽 제목 + 날짜 (영역 클리핑)
+          const maxTitleW = Math.max(40, contentW - pageTextW - 12);
+          ctx.beginPath();
+          ctx.rect(marginPx, curY, maxTitleW, lineH + 4);
+          ctx.clip();
+
+          ctx.font = `600 ${headerFontPx}px ${fontFamily}`;
+          ctx.fillStyle = '#334155';
+          ctx.fillText(titleText, marginPx, curY);
+          const titleW = ctx.measureText(titleText).width;
+
+          if (dateText) {
+            ctx.font = `400 ${headerFontPx}px ${fontFamily}`;
+            ctx.fillStyle = '#64748b';
+            ctx.fillText(dateText, marginPx + titleW, curY);
+          }
+          ctx.restore();
+
+          curY += lineH + 1 * pxPerMm;
+          ctx.strokeStyle = '#cbd5e1';
+          ctx.lineWidth = Math.max(1, 0.25 * pxPerMm);
+          ctx.beginPath();
+          ctx.moveTo(marginPx, curY);
+          ctx.lineTo(marginPx + contentW, curY);
+          ctx.stroke();
+
+          curY += 1.4 * pxPerMm;
+        }
+
+        // 2) 가로 병렬 슬롯 (1열 / 2열 / 3열)
+        const colW = (contentW - gapPx * (perPage - 1)) / perPage;
+        const slotTotalH = canvasH - marginPx - curY;
+        const filterStr = [
+          L.grayscale ? 'grayscale(100%)' : '',
+          `contrast(${L.contrast}%)`,
+          `brightness(${L.brightness}%)`
+        ].filter(Boolean).join(' ');
+
+        for (let colIdx = 0; colIdx < pageItems.length; colIdx++) {
+          const item = pageItems[colIdx];
+          const slotX = marginPx + colIdx * (colW + gapPx);
+          const slotY = curY;
+
+          // 악보 이미지 프레임 (object-contain 비율 유지 최대화)
+          const imgBoxH = Math.max(20, canvasH - marginPx - slotY);
+          const imgUrl = getSheetImageUrl(item.sheetId);
+
+          if (imgUrl) {
+            try {
+              const img = await loadImageFromUrl(imgUrl);
+              const imgRatio = img.naturalWidth / img.naturalHeight;
+              const boxRatio = colW / imgBoxH;
+              let drawW, drawH;
+              if (imgRatio > boxRatio) {
+                drawW = colW;
+                drawH = colW / imgRatio;
+              } else {
+                drawH = imgBoxH;
+                drawW = imgBoxH * imgRatio;
+              }
+              const drawX = slotX + (colW - drawW) / 2;
+              const drawY = slotY + (imgBoxH - drawH) / 2;
+
+              ctx.save();
+              if (filterStr) ctx.filter = filterStr;
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = 'high';
+              ctx.drawImage(img, drawX, drawY, drawW, drawH);
+              ctx.restore();
+            } catch (err) {
+              console.warn('PDF 페이지 이미지 로드 실패:', err);
+            }
+          }
+        }
+
+        return canvas;
+      }
+
+      /**
+       * 전체 콘티를 실제 A4 PDF 파일로 직접 생성하여 다운로드합니다.
+       */
+      async function exportContiToPdf(onProgress) {
+        if (!window.jspdf || !window.jspdf.jsPDF) {
+          throw new Error('PDF 생성 라이브러리(jsPDF)가 로드되지 않았습니다. 인터넷 연결을 확인하거나 브라우저 인쇄를 이용해 주세요.');
+        }
+
+        const items = state.conti.items;
+        const L = state.conti.layout;
+        const perPage = Number(L.perPage) || 1;
+        const isLandscape = L.orientation === 'landscape';
+
+        const pages = [];
+        for (let i = 0; i < items.length; i += perPage) {
+          pages.push(items.slice(i, i + perPage));
+        }
+
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF({
+          orientation: isLandscape ? 'landscape' : 'portrait',
+          unit: 'mm',
+          format: 'a4',
+          compress: true
+        });
+
+        const pageMmW = isLandscape ? 297 : 210;
+        const pageMmH = isLandscape ? 210 : 297;
+
+        for (let i = 0; i < pages.length; i++) {
+          if (onProgress) onProgress(i + 1, pages.length);
+          const pageCanvas = await renderA4PageToCanvas(pages[i], i, pages.length);
+          const imgData = pageCanvas.toDataURL('image/jpeg', 0.92);
+          if (i > 0) pdf.addPage('a4', isLandscape ? 'landscape' : 'portrait');
+          pdf.addImage(imgData, 'JPEG', 0, 0, pageMmW, pageMmH, undefined, 'FAST');
+        }
+
+        const safeFileName = (state.conti.title || '찬양콘티')
+          .replace(/[\\/:*?"<>|]/g, '_')
+          .trim() || '찬양콘티';
+        pdf.save(`${safeFileName}.pdf`);
+      }
+
+      function triggerPrint() {
+        if (state.conti.items.length === 0) {
+          showToast('인쇄하거나 PDF로 저장할 악보가 없습니다. 먼저 악보를 추가해 주세요.', 'warning');
+          return;
+        }
+
+        const isInIframe = (() => {
+          try {
+            return window.self !== window.top;
+          } catch {
+            return true;
+          }
+        })();
+
+        const L = state.conti.layout;
+        const pageCount = Math.ceil(state.conti.items.length / (Number(L.perPage) || 1));
+
+        openModal({
+          title: '인쇄 / PDF 저장',
+          bodyHtml: `
+            <div class="space-y-3.5">
+              <div class="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-600 flex items-center justify-between">
+                <span>A4 ${L.orientation === 'landscape' ? '가로 (297×210mm)' : '세로 (210×297mm)'} · 페이지당 ${L.perPage}열</span>
+                <strong class="text-slate-900">총 ${pageCount}페이지 (${state.conti.items.length}곡)</strong>
+              </div>
+
+              <button id="modal-btn-export-pdf" type="button" class="w-full p-3.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-left flex items-center gap-3 shadow-sm transition cursor-pointer">
+                <div class="w-10 h-10 rounded-lg bg-white/15 flex items-center justify-center shrink-0">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div id="modal-pdf-title" class="text-sm font-bold">A4 PDF 파일로 바로 저장 (추천)</div>
+                  <div id="modal-pdf-desc" class="text-[11px] text-indigo-100 mt-0.5">미리보기 창에서도 즉시 고화질 A4 PDF 파일을 내려받습니다.</div>
+                </div>
+              </button>
+
+              <button id="modal-btn-native-print" type="button" class="w-full p-3.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 text-left flex items-center gap-3 transition cursor-pointer">
+                <div class="w-10 h-10 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                  </svg>
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="text-sm font-bold">브라우저 인쇄 창 열기</div>
+                  <div class="text-[11px] text-slate-500 mt-0.5">프린터 직접 출력 (독립 브라우저 탭에서 실행 시 정상 작동)</div>
+                </div>
+              </button>
+
+              ${
+                isInIframe
+                  ? `<div class="rounded-xl bg-amber-50 border border-amber-200/80 p-3 text-[11px] text-amber-800 leading-relaxed">
+                      <strong>안내:</strong> 현재 앱이 미리보기(iframe) 화면에서 실행 중입니다. 미리보기에서는 브라우저 보안상 시스템 인쇄 창이 차단될 수 있으므로, 위의 <strong>[A4 PDF 파일로 바로 저장]</strong>을 사용하시면 PDF로 내려받아 바로 인쇄하실 수 있습니다.
+                    </div>`
+                  : ''
+              }
+            </div>
+          `,
+          buttons: [{ label: '닫기', variant: 'secondary', onClick: closeModal }],
+          onMount: () => {
+            const pdfBtn = document.getElementById('modal-btn-export-pdf');
+            const pdfTitle = document.getElementById('modal-pdf-title');
+            const pdfDesc = document.getElementById('modal-pdf-desc');
+            const printBtn = document.getElementById('modal-btn-native-print');
+
+            pdfBtn.addEventListener('click', async () => {
+              pdfBtn.disabled = true;
+              pdfBtn.classList.add('opacity-75', 'pointer-events-none');
+              pdfTitle.textContent = 'A4 PDF 생성 중...';
+              pdfDesc.textContent = '고해상도로 페이지를 렌더링하고 있습니다.';
+              try {
+                await exportContiToPdf((cur, total) => {
+                  pdfDesc.textContent = `페이지 변환 중 (${cur} / ${total})...`;
+                });
+                closeModal();
+                showToast('A4 PDF 파일 저장을 완료했습니다.', 'success');
+              } catch (err) {
+                console.error('PDF 생성 오류:', err);
+                pdfBtn.disabled = false;
+                pdfBtn.classList.remove('opacity-75', 'pointer-events-none');
+                pdfTitle.textContent = 'A4 PDF 파일로 바로 저장 (추천)';
+                pdfDesc.textContent = '다시 시도해 주세요.';
+                showToast(err.message || 'PDF 생성 중 오류가 발생했습니다.', 'error');
+              }
+            });
+
+            printBtn.addEventListener('click', () => {
+              closeModal();
+              updateDynamicPageCSS();
+              requestAnimationFrame(() => {
+                window.print();
+              });
+            });
+          }
+        });
+      }
+
+      /* =======================================================
+         19. 이벤트 리스너 연결
+      ======================================================= */
+      function bindEvents() {
+        // 탭 전환
+        els.tabBtns.forEach((btn) => {
+          btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+        });
+
+        // 모바일 뷰 전환 & 리사이즈 대응
+        els.mobileViewEdit.addEventListener('click', () => setMobileView('edit'));
+        els.mobileViewPreview.addEventListener('click', () => setMobileView('preview'));
+        window.addEventListener('resize', () => {
+          setMobileView(state.mobileView);
+          if (state.zoomMode === 'fit') applyZoomToRenderedPages();
+        });
+
+        // 상단 툴바 & 콘티 기본 정보 동기화
+        const onTitleEdit = (val) => {
+          state.conti.title = normalizeNFC(val);
+          markDirty();
+          renderPreview();
+        };
+        els.headerTitle.addEventListener('input', (e) => onTitleEdit(e.target.value));
+        els.contiTitleInput.addEventListener('input', (e) => onTitleEdit(e.target.value));
+        els.contiDateInput.addEventListener('input', (e) => {
+          state.conti.date = e.target.value;
+          markDirty();
+          renderPreview();
+        });
+
+        // 상단 액션 버튼
+        els.btnNewConti.addEventListener('click', createNewConti);
+        els.btnSaveConti.addEventListener('click', () => saveCurrentConti({ asNew: false }));
+        els.btnPrintPdf.addEventListener('click', triggerPrint);
+
+        // 파일 업로드 (클릭 선택)
+        let uploadModeAddToConti = true;
+        els.fileDropzone.addEventListener('click', () => {
+          uploadModeAddToConti = true;
+          els.sheetFileInput.click();
+        });
+        els.btnDbDirectUpload.addEventListener('click', () => {
+          uploadModeAddToConti = false;
+          els.sheetFileInput.click();
+        });
+        els.sheetFileInput.addEventListener('change', (e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            handleUploadedFiles(e.target.files, { addToConti: uploadModeAddToConti });
+            e.target.value = ''; // 동일 파일 재선택 허용
+          }
+        });
+
+        // 샘플 악보 & 전체 비우기
+        // 전체 비우기
+        els.btnClearContiItems.addEventListener('click', async () => {
+          const ok = await confirmDialog({
+            title: '콘티 곡 전체 비우기',
+            message: '현재 콘티의 모든 곡을 비우시겠습니까?\n(악보 DB에 저장된 악보는 그대로 유지됩니다.)',
+            confirmLabel: '비우기',
+            confirmVariant: 'danger'
+          });
+          if (!ok) return;
+          state.conti.items = [];
+          markDirty();
+          renderContiList();
+          renderDbList();
+          renderPreview();
+        });
+
+        // TAB 2 검색 (한글 IME + NFC 대응)
+        bindKoreanSearchInput(els.dbSearchInput, (q) => {
+          state.dbSearchQuery = q;
+          renderDbList();
+        });
+        els.dbSearchClear.addEventListener('click', () => {
+          els.dbSearchInput.value = '';
+          state.dbSearchQuery = '';
+          renderDbList();
+          els.dbSearchInput.focus();
+        });
+
+        // TAB 3 콘티 관리 버튼 & 검색
+        els.btnSavedNew.addEventListener('click', createNewConti);
+        els.btnSavedSave.addEventListener('click', () => saveCurrentConti({ asNew: false }));
+        els.btnSavedSaveAs.addEventListener('click', openSaveAsModal);
+        bindKoreanSearchInput(els.contiSearchInput, (q) => {
+          state.contiSearchQuery = q;
+          renderSavedContiList();
+        });
+
+        // TAB 4 레이아웃 설정
+        els.orientationBtns.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            state.conti.layout.orientation = btn.dataset.orientation;
+            markDirty();
+            syncLayoutControlsFromState();
+            renderPreview();
+          });
+        });
+
+        els.perpageBtns.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            state.conti.layout.perPage = Number(btn.dataset.perpage);
+            markDirty();
+            syncLayoutControlsFromState();
+            renderPreview();
+          });
+        });
+
+        els.toggleShowHeader.addEventListener('change', (e) => {
+          state.conti.layout.showHeader = e.target.checked;
+          markDirty();
+          syncLayoutControlsFromState();
+          renderPreview();
+        });
+
+        els.rangeHeaderFontSize.addEventListener('input', (e) => {
+          const val = Number(e.target.value);
+          state.conti.layout.headerFontSize = val;
+          els.valHeaderFontSize.textContent = `${val} px`;
+          markDirty();
+          renderPreview();
+        });
+
+        els.rangeMargin.addEventListener('input', (e) => {
+          const val = Number(e.target.value);
+          state.conti.layout.marginMm = val;
+          els.valMargin.textContent = `${val} mm`;
+          markDirty();
+          renderPreview();
+        });
+
+        els.rangeGap.addEventListener('input', (e) => {
+          const val = Number(e.target.value);
+          state.conti.layout.gapMm = val;
+          els.valGap.textContent = `${val} mm`;
+          markDirty();
+          renderPreview();
+        });
+
+        els.toggleGrayscale.addEventListener('change', (e) => {
+          state.conti.layout.grayscale = e.target.checked;
+          markDirty();
+          syncLayoutControlsFromState();
+          renderPreview();
+        });
+
+        els.rangeContrast.addEventListener('input', (e) => {
+          const val = Number(e.target.value);
+          state.conti.layout.contrast = val;
+          els.valContrast.textContent = `${val}%`;
+          markDirty();
+          renderPreview();
+        });
+
+        els.rangeBrightness.addEventListener('input', (e) => {
+          const val = Number(e.target.value);
+          state.conti.layout.brightness = val;
+          els.valBrightness.textContent = `${val}%`;
+          markDirty();
+          renderPreview();
+        });
+
+        els.btnResetFilters.addEventListener('click', () => {
+          state.conti.layout.grayscale = false;
+          state.conti.layout.contrast = 105;
+          state.conti.layout.brightness = 100;
+          markDirty();
+          syncLayoutControlsFromState();
+          renderPreview();
+          showToast('화질 보정값을 기본값으로 복원했습니다.', 'info');
+        });
+
+        els.btnLayoutPrint.addEventListener('click', triggerPrint);
+
+        // 미리보기 확대/축소 컨트롤
+        els.btnZoomOut.addEventListener('click', () => {
+          state.zoomMode = 'manual';
+          state.zoomScale = Math.max(0.25, +(state.zoomScale - 0.1).toFixed(2));
+          applyZoomToRenderedPages();
+        });
+        els.btnZoomIn.addEventListener('click', () => {
+          state.zoomMode = 'manual';
+          state.zoomScale = Math.min(1.6, +(state.zoomScale + 0.1).toFixed(2));
+          applyZoomToRenderedPages();
+        });
+        els.btnZoomFit.addEventListener('click', () => {
+          state.zoomMode = 'fit';
+          applyZoomToRenderedPages();
+        });
+
+        // 단축키 지원 (Ctrl/Cmd + S 저장)
+        window.addEventListener('keydown', (e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+            e.preventDefault();
+            saveCurrentConti({ asNew: false });
+          }
+        });
+
+        // 외부 파일 전역 드롭 설정
+        setupGlobalFileDragAndDrop();
+      }
+
+      /* =======================================================
+         20. 앱 초기화 (IndexedDB 데이터 로드)
+      ======================================================= */
+      async function initApp() {
+        bindEvents();
+        syncLayoutControlsFromState();
+        renderHeaderStatus();
+        renderContiList();
+        renderPreview();
+        setMobileView('edit');
+
+        try {
+          const [sheets, contis] = await Promise.all([
+            dbGetAll(STORE_SHEETS),
+            dbGetAll(STORE_CONTIS)
+          ]);
+
+          // 최신순 정렬 및 기존 데이터 NFC 보정
+          state.dbSheets = sheets
+            .map((s) => ({
+              ...s,
+              title: normalizeNFC(s.title),
+              key: normalizeNFC(s.key),
+              memo: normalizeNFC(s.memo)
+            }))
+            .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+          state.dbContis = contis
+            .map((c) => ({
+              ...c,
+              title: normalizeNFC(c.title)
+            }))
+            .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+          renderDbList();
+          renderSavedContiList();
+        } catch (err) {
+          console.error('초기 데이터베이스 로드 오류:', err);
+          showToast('로컬 데이터베이스 초기화 중 문제가 발생했습니다.', 'error');
+        }
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initApp);
+      } else {
+        initApp();
+      }
+    })();
+  </script>
+</body>
+</html>
