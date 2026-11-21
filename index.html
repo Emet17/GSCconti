@@ -1237,6 +1237,7 @@ create policy "praise_sheets_delete_own" on storage.objects
         return {
           orientation: 'landscape', // 'portrait' | 'landscape'
           perPage: 2,               // 1 | 2 | 3
+          pageOverrides: {},        // 페이지별 개별 곡 수 오버라이드 { [pageIndex]: 1 | 2 | 3 }
           showHeader: true,
           headerFontSize: 12,       // pt (8 ~ 24)
           marginMm: 5,
@@ -1266,6 +1267,7 @@ create policy "praise_sheets_delete_own" on storage.objects
             perPage: [1, 2, 3].includes(Number(parsed.perPage))
               ? Number(parsed.perPage)
               : defaults.perPage,
+            pageOverrides: {},
             showHeader: typeof parsed.showHeader === 'boolean'
               ? parsed.showHeader
               : defaults.showHeader,
@@ -1299,14 +1301,71 @@ create policy "praise_sheets_delete_own" on storage.objects
        */
       function saveLastLayout(layout) {
         try {
-          localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify({
+          const { pageOverrides, ...persistable } = {
             ...createDefaultLayout(),
             ...layout
-          }));
+          };
+          localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(persistable));
         } catch (err) {
           console.warn('레이아웃 설정 저장 실패:', err);
         }
       }
+
+      /**
+       * 전체 곡 목록을 기본 perPage 및 페이지별 개별 설정(pageOverrides)에 따라 페이지 단위로 분할합니다.
+       */
+      function buildContiPages(items = state.conti.items, layout = state.conti.layout) {
+        const defaultPerPage = [1, 2, 3].includes(Number(layout?.perPage)) ? Number(layout.perPage) : 2;
+        const overrides = layout?.pageOverrides && typeof layout.pageOverrides === 'object' ? layout.pageOverrides : {};
+        const pages = [];
+        let cursor = 0;
+        let pageIdx = 0;
+
+        while (cursor < items.length) {
+          const overrideVal = Number(overrides[pageIdx]);
+          const cols = [1, 2, 3].includes(overrideVal) ? overrideVal : defaultPerPage;
+          const pageItems = items.slice(cursor, cursor + cols);
+          pages.push({
+            items: pageItems,
+            cols,
+            isOverridden: [1, 2, 3].includes(overrideVal) && overrideVal !== defaultPerPage
+          });
+          cursor += cols;
+          pageIdx++;
+        }
+        return pages;
+      }
+
+      /**
+       * 특정 페이지의 곡 수(열 수)를 개별 변경합니다.
+       */
+      function setPagePerPageOverride(pageIndex, cols) {
+        const validCols = [1, 2, 3].includes(Number(cols)) ? Number(cols) : 2;
+        const defaultPerPage = Number(state.conti.layout.perPage) || 2;
+        if (!state.conti.layout.pageOverrides || typeof state.conti.layout.pageOverrides !== 'object') {
+          state.conti.layout.pageOverrides = {};
+        }
+
+        if (validCols === defaultPerPage) {
+          delete state.conti.layout.pageOverrides[pageIndex];
+        } else {
+          state.conti.layout.pageOverrides[pageIndex] = validCols;
+        }
+
+        // 현재 총 페이지 수 이후의 불필요한 오버라이드 정리
+        const updatedPages = buildContiPages(state.conti.items, state.conti.layout);
+        Object.keys(state.conti.layout.pageOverrides).forEach((k) => {
+          if (Number(k) >= updatedPages.length) {
+            delete state.conti.layout.pageOverrides[k];
+          }
+        });
+
+        markDirty();
+        renderPreview();
+      }
+
+      let supabaseClient = null;
+      let supabaseAuthUnsubscribe = null;
 
       function createFreshConti() {
         return {
@@ -1322,14 +1381,14 @@ create policy "praise_sheets_delete_own" on storage.objects
         activeTab: 'conti',
         mobileView: 'edit',
         isDirty: false,
-        conti: createFreshConti(),
-        dbSheets: [],
-        dbContis: [],
+        zoomMode: 'fit',
+        zoomScale: 0.72,
         dbSearchQuery: '',
         contiSearchQuery: '',
+        dbSheets: [],
+        dbContis: [],
         selectedDbSheetIds: new Set(),
-        zoomMode: 'fit',
-        zoomScale: 0.75,
+        conti: createFreshConti(),
         cloud: {
           configured: false,
           user: null,
@@ -1339,25 +1398,12 @@ create policy "praise_sheets_delete_own" on storage.objects
         }
       };
 
-      let supabaseClient = null;
-      let supabaseAuthUnsubscribe = null;
-
-      // ObjectURL 캐시 (메모리 누수 방지 및 빠른 렌더링)
-      const sheetImageUrlMap = new Map();
-      const sheetThumbUrlMap = new Map();
-
-      // 외부 파일 드래그와 내부 곡 순서 드래그 분리용 상태 변수
-      let isInternalCardDragging = false;
-      let draggingCardUid = null;
-      let externalDragCounter = 0;
-
       /* =======================================================
-         5. DOM 요소 참조 (els)
+         5. DOM 요소 캐시 (els)
       ======================================================= */
       const els = {
         dynamicPageStyle: document.getElementById('dynamic-page-style'),
-
-        // 초기 로그인/회원가입 시작 화면 (Auth Gate)
+        // 시작 로그인/회원가입 화면
         authGate: document.getElementById('auth-gate'),
         gateAuthForm: document.getElementById('gate-auth-form'),
         gateNotConfiguredBanner: document.getElementById('gate-not-configured-banner'),
@@ -1369,7 +1415,7 @@ create policy "praise_sheets_delete_own" on storage.objects
         gateBtnConfig: document.getElementById('gate-btn-config'),
         gateBtnGuest: document.getElementById('gate-btn-guest'),
 
-        // 상단 툴바 & 반응형 패널
+        // 상단 헤더
         headerTitle: document.getElementById('header-conti-title'),
         saveStatusBadge: document.getElementById('save-status-badge'),
         mobileViewEdit: document.getElementById('mobile-view-edit'),
@@ -1380,15 +1426,15 @@ create policy "praise_sheets_delete_own" on storage.objects
         btnNewConti: document.getElementById('btn-new-conti'),
         btnSaveConti: document.getElementById('btn-save-conti'),
         btnPrintPdf: document.getElementById('btn-print-pdf'),
+
+        // 레이아웃 & 탭
         leftPanel: document.getElementById('left-panel'),
         previewPanel: document.getElementById('preview-panel'),
-
-        // 탭 네비게이션
         tabBtns: Array.from(document.querySelectorAll('.tab-btn')),
         tabPanels: Array.from(document.querySelectorAll('.tab-panel')),
         tabDbCount: document.getElementById('tab-db-count'),
 
-        // 콘티 구성 탭
+        // TAB: 콘티 구성
         contiTitleInput: document.getElementById('conti-title-input'),
         contiDateInput: document.getElementById('conti-date-input'),
         fileDropzone: document.getElementById('file-dropzone'),
@@ -1397,7 +1443,7 @@ create policy "praise_sheets_delete_own" on storage.objects
         btnClearContiItems: document.getElementById('btn-clear-conti-items'),
         contiList: document.getElementById('conti-list'),
 
-        // 악보 DB 탭
+        // TAB: 악보 DB
         dbSearchInput: document.getElementById('db-search-input'),
         dbSearchClear: document.getElementById('db-search-clear'),
         dbTotalCount: document.getElementById('db-total-count'),
@@ -1413,7 +1459,7 @@ create policy "praise_sheets_delete_own" on storage.objects
         btnDbBulkDelete: document.getElementById('btn-db-bulk-delete'),
         dbList: document.getElementById('db-list'),
 
-        // 콘티 관리 탭
+        // TAB: 콘티 관리
         btnSavedNew: document.getElementById('btn-saved-new'),
         btnSavedSave: document.getElementById('btn-saved-save'),
         btnSavedSaveAs: document.getElementById('btn-saved-save-as'),
@@ -1421,30 +1467,29 @@ create policy "praise_sheets_delete_own" on storage.objects
         btnSavedBackupImport: document.getElementById('btn-saved-backup-import'),
         contiSearchInput: document.getElementById('conti-search-input'),
         savedContiList: document.getElementById('saved-conti-list'),
-        backupFileInput: document.getElementById('backup-file-input'),
 
-        // 레이아웃·인쇄 탭
+        // TAB: 레이아웃·인쇄
         orientationBtns: Array.from(document.querySelectorAll('.orientation-btn')),
         perpageBtns: Array.from(document.querySelectorAll('.perpage-btn')),
         toggleShowHeader: document.getElementById('toggle-show-header'),
         statusShowHeader: document.getElementById('status-show-header'),
         headerFontSizeControl: document.getElementById('header-fontsize-control'),
-        valHeaderFontSize: document.getElementById('val-header-fontsize'),
         rangeHeaderFontSize: document.getElementById('range-header-fontsize'),
-        valMargin: document.getElementById('val-margin'),
+        valHeaderFontSize: document.getElementById('val-header-fontsize'),
         rangeMargin: document.getElementById('range-margin'),
-        valGap: document.getElementById('val-gap'),
+        valMargin: document.getElementById('val-margin'),
         rangeGap: document.getElementById('range-gap'),
+        valGap: document.getElementById('val-gap'),
         toggleGrayscale: document.getElementById('toggle-grayscale'),
         statusGrayscale: document.getElementById('status-grayscale'),
-        valContrast: document.getElementById('val-contrast'),
         rangeContrast: document.getElementById('range-contrast'),
-        valBrightness: document.getElementById('val-brightness'),
+        valContrast: document.getElementById('val-contrast'),
         rangeBrightness: document.getElementById('range-brightness'),
+        valBrightness: document.getElementById('val-brightness'),
         btnResetFilters: document.getElementById('btn-reset-filters'),
         btnLayoutPrint: document.getElementById('btn-layout-print'),
 
-        // 미리보기 패널
+        // 오른쪽 미리보기
         previewSummaryText: document.getElementById('preview-summary-text'),
         btnZoomOut: document.getElementById('btn-zoom-out'),
         btnZoomFit: document.getElementById('btn-zoom-fit'),
@@ -1453,158 +1498,160 @@ create policy "praise_sheets_delete_own" on storage.objects
         previewScrollViewport: document.getElementById('preview-scroll-viewport'),
         previewPagesContainer: document.getElementById('preview-pages-container'),
 
-        // 오버레이, 모달, 토스트
-        globalFileDropOverlay: document.getElementById('global-file-drop-overlay'),
+        // 오버레이, 모달, 토스트, 백업 파일 입력
+        globalDropOverlay: document.getElementById('global-file-drop-overlay'),
         modalBackdrop: document.getElementById('modal-backdrop'),
         modalDialog: document.getElementById('modal-dialog'),
         modalTitle: document.getElementById('modal-title'),
         modalCloseX: document.getElementById('modal-close-x'),
         modalBody: document.getElementById('modal-body'),
         modalFooter: document.getElementById('modal-footer'),
-        toastContainer: document.getElementById('toast-container')
+        toastContainer: document.getElementById('toast-container'),
+        backupFileInput: document.getElementById('backup-file-input')
       };
 
       /* =======================================================
-         6. 이미지 URL 캐시 관리 헬퍼
+         6. 악보 Blob ObjectURL 캐시 관리
       ======================================================= */
-      function setSheetUrls(sheetId, mainBlobOrUrl, thumbBlobOrUrl) {
-        if (mainBlobOrUrl) {
-          const prev = sheetImageUrlMap.get(sheetId);
-          const next = typeof mainBlobOrUrl === 'string' ? mainBlobOrUrl : URL.createObjectURL(mainBlobOrUrl);
-          if (prev && prev !== next && prev.startsWith('blob:')) {
-            URL.revokeObjectURL(prev);
-          }
-          sheetImageUrlMap.set(sheetId, next);
-        }
-        if (thumbBlobOrUrl) {
-          const prevT = sheetThumbUrlMap.get(sheetId);
-          const nextT = typeof thumbBlobOrUrl === 'string' ? thumbBlobOrUrl : URL.createObjectURL(thumbBlobOrUrl);
-          if (prevT && prevT !== nextT && prevT.startsWith('blob:')) {
-            URL.revokeObjectURL(prevT);
-          }
-          sheetThumbUrlMap.set(sheetId, nextT);
-        }
-      }
+      const sheetUrlCache = new Map();
 
-      function getSheetImageUrl(sheetId) {
-        if (sheetImageUrlMap.has(sheetId)) return sheetImageUrlMap.get(sheetId);
-        const sheet = state.dbSheets.find((s) => s.id === sheetId);
-        if (sheet && sheet.blob) {
-          const url = URL.createObjectURL(sheet.blob);
-          sheetImageUrlMap.set(sheetId, url);
-          return url;
-        }
-        return '';
-      }
-
-      function getSheetThumbUrl(sheetId) {
-        if (sheetThumbUrlMap.has(sheetId)) return sheetThumbUrlMap.get(sheetId);
-        const sheet = state.dbSheets.find((s) => s.id === sheetId);
-        if (sheet && (sheet.thumbnailBlob || sheet.blob)) {
-          const url = URL.createObjectURL(sheet.thumbnailBlob || sheet.blob);
-          sheetThumbUrlMap.set(sheetId, url);
-          return url;
-        }
-        return getSheetImageUrl(sheetId);
+      function setSheetUrls(sheetId, blob, thumbnailBlob) {
+        revokeSheetUrls(sheetId);
+        const imageUrl = blob ? URL.createObjectURL(blob) : '';
+        const thumbUrl = thumbnailBlob && thumbnailBlob !== blob
+          ? URL.createObjectURL(thumbnailBlob)
+          : imageUrl;
+        sheetUrlCache.set(sheetId, { imageUrl, thumbUrl, separateThumb: thumbUrl !== imageUrl });
       }
 
       function revokeSheetUrls(sheetId) {
-        const mainUrl = sheetImageUrlMap.get(sheetId);
-        if (mainUrl && mainUrl.startsWith('blob:')) URL.revokeObjectURL(mainUrl);
-        sheetImageUrlMap.delete(sheetId);
+        const cached = sheetUrlCache.get(sheetId);
+        if (!cached) return;
+        try {
+          if (cached.imageUrl && cached.imageUrl.startsWith('blob:')) URL.revokeObjectURL(cached.imageUrl);
+          if (cached.separateThumb && cached.thumbUrl && cached.thumbUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(cached.thumbUrl);
+          }
+        } catch {}
+        sheetUrlCache.delete(sheetId);
+      }
 
-        const thumbUrl = sheetThumbUrlMap.get(sheetId);
-        if (thumbUrl && thumbUrl.startsWith('blob:')) URL.revokeObjectURL(thumbUrl);
-        sheetThumbUrlMap.delete(sheetId);
+      function ensureSheetUrls(sheetId) {
+        if (sheetUrlCache.has(sheetId)) return sheetUrlCache.get(sheetId);
+        const sheet = state.dbSheets.find((s) => s.id === sheetId);
+        if (!sheet) return null;
+        if (sheet.tempUrl) {
+          return { imageUrl: sheet.tempUrl, thumbUrl: sheet.tempUrl, separateThumb: false };
+        }
+        if (sheet.blob) {
+          setSheetUrls(sheetId, sheet.blob, sheet.thumbnailBlob);
+          return sheetUrlCache.get(sheetId) || null;
+        }
+        return null;
+      }
+
+      function getSheetImageUrl(sheetId) {
+        const entry = ensureSheetUrls(sheetId);
+        return entry ? entry.imageUrl : '';
+      }
+
+      function getSheetThumbUrl(sheetId) {
+        const entry = ensureSheetUrls(sheetId);
+        return entry ? entry.thumbUrl : '';
       }
 
       /* =======================================================
-         7. 토스트 알림 & 공용 모달 시스템 (alert/confirm 대체)
+         7. 토스트 & 공용 모달 시스템 (alert / confirm 대체)
       ======================================================= */
-      function showToast(message, type = 'info') {
-        const styles = {
-          success: 'bg-emerald-600 text-white',
-          error: 'bg-rose-600 text-white',
-          warning: 'bg-amber-500 text-white',
-          info: 'bg-slate-800 text-white'
+      function showToast(message, type = 'info', duration = 3000) {
+        const colorStyles = {
+          success: 'bg-emerald-600 text-white border-emerald-500',
+          error: 'bg-rose-600 text-white border-rose-500',
+          warning: 'bg-amber-500 text-white border-amber-400',
+          info: 'bg-slate-800 text-white border-slate-700'
         };
         const toast = document.createElement('div');
-        toast.className = `pointer-events-auto px-4 py-2.5 rounded-xl shadow-lg text-xs sm:text-sm font-medium flex items-center gap-2 transition-all duration-200 opacity-0 translate-y-2 ${styles[type] || styles.info}`;
+        toast.className = `pointer-events-auto px-4 py-2.5 rounded-xl border shadow-lg text-xs sm:text-sm font-medium transition-all duration-200 translate-y-2 opacity-0 ${
+          colorStyles[type] || colorStyles.info
+        }`;
         toast.textContent = message;
         els.toastContainer.appendChild(toast);
 
         requestAnimationFrame(() => {
-          toast.classList.remove('opacity-0', 'translate-y-2');
+          toast.classList.remove('translate-y-2', 'opacity-0');
         });
 
         setTimeout(() => {
-          toast.classList.add('opacity-0', 'translate-y-2');
+          toast.classList.add('opacity-0', 'translate-y-1');
           setTimeout(() => toast.remove(), 220);
-        }, 2800);
+        }, duration);
       }
 
       function closeModal() {
         els.modalBackdrop.classList.add('hidden');
         els.modalBody.innerHTML = '';
         els.modalFooter.innerHTML = '';
-        els.modalDialog.className = 'bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden transform transition-all';
       }
 
-      function openModal({ title = '알림', bodyHtml = '', buttons = [], onMount = null, maxWidth = 'max-w-md' }) {
-        els.modalTitle.textContent = title;
+      function openModal({ title = '알림', bodyHtml = '', buttons = [], maxWidth = 'max-w-md', onMount = null }) {
         els.modalDialog.className = `bg-white rounded-2xl shadow-2xl border border-slate-200 w-full ${maxWidth} overflow-hidden transform transition-all`;
+        els.modalTitle.textContent = title;
         els.modalBody.innerHTML = bodyHtml;
         els.modalFooter.innerHTML = '';
 
-        const variantClasses = {
-          primary: 'bg-brand-600 hover:bg-brand-700 text-white font-semibold',
-          danger: 'bg-rose-600 hover:bg-rose-700 text-white font-semibold',
-          secondary: 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-medium'
+        const btnVariants = {
+          primary: 'px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-brand-600 hover:bg-brand-700 text-white transition cursor-pointer',
+          danger: 'px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-rose-600 hover:bg-rose-700 text-white transition cursor-pointer',
+          secondary: 'px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 transition cursor-pointer'
         };
 
-        buttons.forEach((btnCfg) => {
+        buttons.forEach((b) => {
           const btn = document.createElement('button');
           btn.type = 'button';
-          btn.textContent = btnCfg.label;
-          btn.className = `px-3.5 py-2 rounded-lg text-xs sm:text-sm transition cursor-pointer ${variantClasses[btnCfg.variant || 'secondary']}`;
+          btn.textContent = b.label;
+          btn.className = btnVariants[b.variant || 'secondary'] || btnVariants.secondary;
           btn.addEventListener('click', () => {
-            if (btnCfg.onClick) btnCfg.onClick();
+            if (typeof b.onClick === 'function') b.onClick();
           });
           els.modalFooter.appendChild(btn);
         });
 
         els.modalBackdrop.classList.remove('hidden');
-        if (onMount) onMount();
+        if (typeof onMount === 'function') {
+          requestAnimationFrame(() => onMount());
+        }
       }
 
-      function confirmDialog({ title = '확인', message = '', confirmLabel = '확인', cancelLabel = '취소', confirmVariant = 'primary' }) {
+      function confirmDialog({ title = '확인', message = '', confirmLabel = '확인', confirmVariant = 'primary' }) {
         return new Promise((resolve) => {
-          let resolved = false;
-          const finish = (val) => {
-            if (resolved) return;
-            resolved = true;
-            closeModal();
-            resolve(val);
-          };
           openModal({
             title,
-            bodyHtml: `<p class="text-sm text-slate-600 whitespace-pre-line leading-relaxed">${escapeHtml(message)}</p>`,
+            bodyHtml: `<p class="text-xs sm:text-sm text-slate-600 whitespace-pre-line leading-relaxed">${escapeHtml(message)}</p>`,
             buttons: [
-              { label: cancelLabel, variant: 'secondary', onClick: () => finish(false) },
-              { label: confirmLabel, variant: confirmVariant, onClick: () => finish(true) }
+              {
+                label: '취소',
+                variant: 'secondary',
+                onClick: () => {
+                  closeModal();
+                  resolve(false);
+                }
+              },
+              {
+                label: confirmLabel,
+                variant: confirmVariant,
+                onClick: () => {
+                  closeModal();
+                  resolve(true);
+                }
+              }
             ]
           });
-          const onClose = () => {
-            els.modalCloseX.removeEventListener('click', onClose);
-            finish(false);
-          };
-          els.modalCloseX.addEventListener('click', onClose);
         });
       }
 
-      function openSheetZoomModal(sheetId, title = '') {
-        const url = getSheetImageUrl(sheetId);
-        if (!url) {
+      function openSheetZoomModal(sheetId, title = '악보 크게 보기') {
+        const imgUrl = getSheetImageUrl(sheetId);
+        if (!imgUrl) {
           showToast('악보 이미지를 찾을 수 없습니다.', 'warning');
           return;
         }
@@ -1613,7 +1660,7 @@ create policy "praise_sheets_delete_own" on storage.objects
           maxWidth: 'max-w-3xl',
           bodyHtml: `
             <div class="max-h-[72vh] overflow-auto bg-slate-100 rounded-xl p-2 flex items-center justify-center">
-              <img src="${url}" alt="${escapeHtml(title)}" class="max-w-full h-auto rounded-lg shadow-sm bg-white" />
+              <img src="${imgUrl}" alt="${escapeHtml(title)}" class="max-w-full h-auto rounded-lg shadow-sm" />
             </div>
           `,
           buttons: [{ label: '닫기', variant: 'secondary', onClick: closeModal }]
@@ -1621,49 +1668,18 @@ create policy "praise_sheets_delete_own" on storage.objects
       }
 
       /* =======================================================
-         8. 상단 상태 표시, 탭 전환 및 반응형 모바일 뷰
+         8. 탭 · 모바일 뷰 · 헤더 상태 동기화
       ======================================================= */
-      function markDirty() {
-        state.isDirty = true;
-        renderHeaderStatus();
-      }
-
-      function renderHeaderStatus() {
-        if (els.headerTitle.value !== state.conti.title) {
-          els.headerTitle.value = state.conti.title;
-        }
-        if (els.contiTitleInput.value !== state.conti.title) {
-          els.contiTitleInput.value = state.conti.title;
-        }
-        if (els.contiDateInput.value !== state.conti.date) {
-          els.contiDateInput.value = state.conti.date;
-        }
-
-        if (state.isDirty) {
-          els.saveStatusBadge.className = 'shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700';
-          els.saveStatusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>수정됨';
-        } else if (state.conti.id) {
-          els.saveStatusBadge.className = 'shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700';
-          els.saveStatusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>저장됨';
-        } else {
-          els.saveStatusBadge.className = 'shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600';
-          els.saveStatusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>새 문서';
-        }
-      }
-
-      function switchTab(tabKey) {
-        state.activeTab = tabKey;
+      function switchTab(tabName) {
+        state.activeTab = tabName;
         els.tabBtns.forEach((btn) => {
-          const isActive = btn.dataset.tab === tabKey;
-          btn.classList.toggle('bg-white', isActive);
-          btn.classList.toggle('text-brand-600', isActive);
-          btn.classList.toggle('shadow-sm', isActive);
-          btn.classList.toggle('font-semibold', isActive);
-          btn.classList.toggle('text-slate-600', !isActive);
-          btn.classList.toggle('font-medium', !isActive);
+          const isActive = btn.dataset.tab === tabName;
+          btn.className = isActive
+            ? 'tab-btn flex flex-col sm:flex-row items-center justify-center gap-1 py-2 px-1.5 rounded-lg text-xs font-semibold transition bg-white text-brand-600 shadow-sm'
+            : 'tab-btn flex flex-col sm:flex-row items-center justify-center gap-1 py-2 px-1.5 rounded-lg text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 transition';
         });
         els.tabPanels.forEach((panel) => {
-          panel.classList.toggle('hidden', panel.id !== `tab-panel-${tabKey}`);
+          panel.classList.toggle('hidden', panel.id !== `tab-panel-${tabName}`);
         });
       }
 
@@ -1676,50 +1692,76 @@ create policy "praise_sheets_delete_own" on storage.objects
           els.previewPanel.classList.add('flex');
           return;
         }
-        if (view === 'edit') {
-          els.leftPanel.classList.remove('hidden');
-          els.previewPanel.classList.add('hidden');
-          els.previewPanel.classList.remove('flex');
-          els.mobileViewEdit.className = 'px-2.5 py-1 text-xs font-semibold rounded-md bg-white text-brand-600 shadow-xs transition';
-          els.mobileViewPreview.className = 'px-2.5 py-1 text-xs font-semibold rounded-md text-slate-600 transition';
-        } else {
-          els.leftPanel.classList.add('hidden');
-          els.previewPanel.classList.remove('hidden');
-          els.previewPanel.classList.add('flex');
-          els.mobileViewEdit.className = 'px-2.5 py-1 text-xs font-semibold rounded-md text-slate-600 transition';
-          els.mobileViewPreview.className = 'px-2.5 py-1 text-xs font-semibold rounded-md bg-white text-brand-600 shadow-xs transition';
+        const showPreview = view === 'preview';
+        els.leftPanel.classList.toggle('hidden', showPreview);
+        els.previewPanel.classList.toggle('hidden', !showPreview);
+        els.previewPanel.classList.toggle('flex', showPreview);
+
+        els.mobileViewEdit.className = !showPreview
+          ? 'px-2.5 py-1 text-xs font-semibold rounded-md bg-white text-brand-600 shadow-xs transition'
+          : 'px-2.5 py-1 text-xs font-semibold rounded-md text-slate-600 transition';
+        els.mobileViewPreview.className = showPreview
+          ? 'px-2.5 py-1 text-xs font-semibold rounded-md bg-white text-brand-600 shadow-xs transition'
+          : 'px-2.5 py-1 text-xs font-semibold rounded-md text-slate-600 transition';
+
+        if (showPreview && state.zoomMode === 'fit') {
           requestAnimationFrame(() => applyZoomToRenderedPages());
         }
       }
 
-      /* =======================================================
-         9. 한글 IME 조합(compositionend) 대응 검색 바인딩
-      ======================================================= */
-      function bindKoreanSearchInput(inputEl, onChange) {
-        let isComposing = false;
-        const emit = () => {
-          onChange(normalizeNFC(inputEl.value));
-        };
-        inputEl.addEventListener('compositionstart', () => {
-          isComposing = true;
-        });
-        inputEl.addEventListener('compositionend', () => {
-          isComposing = false;
-          emit();
-        });
-        inputEl.addEventListener('input', () => {
-          // 조합 중에도 실시간 피드백을 주되 NFC 정규화로 누락 방지
-          emit();
-        });
-        inputEl.addEventListener('search', emit);
+      function renderHeaderStatus() {
+        if (els.headerTitle.value !== state.conti.title) {
+          els.headerTitle.value = state.conti.title;
+        }
+        if (els.contiTitleInput.value !== state.conti.title) {
+          els.contiTitleInput.value = state.conti.title;
+        }
+        if (els.contiDateInput.value !== state.conti.date) {
+          els.contiDateInput.value = state.conti.date || getTodayDateString();
+        }
+
+        if (state.isDirty) {
+          els.saveStatusBadge.className = 'shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800';
+          els.saveStatusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>수정됨';
+        } else if (state.conti.id) {
+          els.saveStatusBadge.className = 'shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800';
+          els.saveStatusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>저장됨';
+        } else {
+          els.saveStatusBadge.className = 'shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600';
+          els.saveStatusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>새 문서';
+        }
+      }
+
+      function markDirty() {
+        state.isDirty = true;
+        renderHeaderStatus();
       }
 
       /* =======================================================
-         10. Local-First 악보 이미지 업로드 & 백그라운드 DB 자동 저장
+         9. 한글 IME 조합 안전 검색 입력 바인딩
       ======================================================= */
-      function handleUploadedFiles(fileList, { addToConti = true } = {}) {
-        const imageFiles = Array.from(fileList || []).filter((f) => f && f.type && f.type.startsWith('image/'));
-        if (imageFiles.length === 0) {
+      function bindKoreanSearchInput(inputEl, onChange) {
+        let isComposing = false;
+        inputEl.addEventListener('compositionstart', () => {
+          isComposing = true;
+        });
+        inputEl.addEventListener('compositionend', (e) => {
+          isComposing = false;
+          onChange(normalizeNFC(e.target.value));
+        });
+        inputEl.addEventListener('input', (e) => {
+          if (!isComposing) {
+            onChange(normalizeNFC(e.target.value));
+          }
+        });
+      }
+
+      /* =======================================================
+         10. Local-First 악보 이미지 업로드 & 백그라운드 DB 저장
+      ======================================================= */
+      async function handleUploadedFiles(fileList, { addToConti = true } = {}) {
+        const files = Array.from(fileList || []).filter((f) => f && f.type && f.type.startsWith('image/'));
+        if (files.length === 0) {
           showToast('이미지 파일(JPG, PNG, WebP 등)만 업로드할 수 있습니다.', 'warning');
           return;
         }
@@ -1727,155 +1769,140 @@ create policy "praise_sheets_delete_own" on storage.objects
         const now = Date.now();
         const tasks = [];
 
-        imageFiles.forEach((file, idx) => {
-          const parsed = parseSheetFilename(file.name);
+        files.forEach((file, idx) => {
+          const { title, key } = parseSheetFilename(file.name);
           const sheetId = generateId('sheet');
-          const instantUrl = URL.createObjectURL(file);
+          const tempUrl = URL.createObjectURL(file);
 
-          // 1) 즉시 화면 반영을 위한 임시 URL 캐시 및 메모리 레코드 등록
-          setSheetUrls(sheetId, instantUrl, instantUrl);
-
-          const pendingRecord = {
+          const pendingSheet = {
             id: sheetId,
-            title: parsed.title,
-            key: parsed.key,
+            title,
+            key,
             memo: '',
             blob: file,
             thumbnailBlob: file,
+            tempUrl,
             width: 0,
             height: 0,
             fileSize: file.size || 0,
             createdAt: now + idx,
-            updatedAt: now + idx
+            updatedAt: now + idx,
+            cloudSynced: false,
+            cloudOwnerId: state.cloud.user ? state.cloud.user.id : null
           };
-          state.dbSheets.unshift(pendingRecord);
+
+          state.dbSheets.unshift(pendingSheet);
 
           if (addToConti) {
             state.conti.items.push({
               uid: generateId('item'),
               sheetId,
-              title: parsed.title,
-              key: parsed.key,
+              title,
+              key,
               memo: ''
             });
           }
 
-          tasks.push({ file, sheetId, record: pendingRecord });
+          tasks.push({ file, sheet: pendingSheet, tempUrl });
         });
 
-        // 2) 기다림 없이 즉시 화면과 미리보기 렌더링 (Local-First)
+        // 1) 즉시 UI 및 미리보기 반영 (Local-First)
         if (addToConti) {
           markDirty();
           renderContiList();
           renderPreview();
         }
         renderDbList();
-        showToast(
-          addToConti
-            ? `${imageFiles.length}개의 악보를 콘티에 추가했습니다. (DB 자동 최적화 저장 중)`
-            : `${imageFiles.length}개의 악보를 DB에 등록하고 있습니다.`,
-          'success'
-        );
+        showToast(`${files.length}개의 악보를 추가했습니다. (DB 자동 압축 저장 중...)`, 'info');
 
-        // 3) 백그라운드에서 이미지 압축 및 IndexedDB 영구 저장
-        (async () => {
-          for (const task of tasks) {
-            try {
-              const optimized = await optimizeSheetImage(task.file);
-              const existing = state.dbSheets.find((s) => s.id === task.sheetId);
-              if (!existing) continue; // 도중 삭제된 경우 스킵
+        // 2) 백그라운드 비동기 압축 및 IndexedDB / 클라우드 영구 저장
+        for (const task of tasks) {
+          try {
+            const optimized = await optimizeSheetImage(task.file);
+            task.sheet.blob = optimized.blob;
+            task.sheet.thumbnailBlob = optimized.thumbnailBlob;
+            task.sheet.width = optimized.width;
+            task.sheet.height = optimized.height;
+            task.sheet.fileSize = optimized.fileSize;
+            task.sheet.updatedAt = Date.now();
+            delete task.sheet.tempUrl;
 
-              existing.blob = optimized.blob;
-              existing.thumbnailBlob = optimized.thumbnailBlob;
-              existing.width = optimized.width;
-              existing.height = optimized.height;
-              existing.fileSize = optimized.fileSize;
-              existing.updatedAt = Date.now();
-              existing.cloudSynced = false;
+            setSheetUrls(task.sheet.id, optimized.blob, optimized.thumbnailBlob);
+            URL.revokeObjectURL(task.tempUrl);
 
-              setSheetUrls(task.sheetId, optimized.blob, optimized.thumbnailBlob);
-              await dbPut(STORE_SHEETS, existing);
-              if (state.cloud.user) {
-                await cloudUpsertSheet(existing);
-              }
-            } catch (err) {
-              console.warn('백그라운드 악보 압축/저장 오류:', err);
-              // 압축 실패 시 원본 Blob으로라도 안전 저장 시도
-              try {
-                const existing = state.dbSheets.find((s) => s.id === task.sheetId);
-                if (existing) {
-                  existing.cloudSynced = false;
-                  await dbPut(STORE_SHEETS, existing);
-                  if (state.cloud.user) {
-                    await cloudUpsertSheet(existing);
-                  }
-                }
-              } catch (dbErr) {
-                console.error('원본 DB 저장 실패:', dbErr);
-              }
+            await dbPut(STORE_SHEETS, task.sheet);
+            if (state.cloud.user) {
+              cloudUpsertSheet(task.sheet, { uploadImages: true }).catch((err) =>
+                console.warn('클라우드 악보 업로드 실패:', err)
+              );
             }
+          } catch (err) {
+            console.error('악보 이미지 최적화/저장 오류:', err);
           }
-          renderDbList();
-          renderPreview();
-        })();
+        }
+
+        renderDbList();
+        renderPreview();
       }
 
       /* =======================================================
-         11. 외부 파일 드래그 앤 드롭 (내부 카드 순서 드래그와 완벽 분리)
+         11. 전역 외부 파일 드래그 앤 드롭 (내부 카드 정렬과 완벽 분리)
       ======================================================= */
-      function isExternalFileDrag(e) {
-        if (isInternalCardDragging) return false;
-        const dt = e.dataTransfer;
-        if (!dt) return false;
-        const types = Array.from(dt.types || []);
-        if (types.includes('application/x-conti-card')) return false;
-        return types.includes('Files');
-      }
+      let isInternalCardDragging = false;
+      let draggingCardUid = null;
 
       function setupGlobalFileDragAndDrop() {
+        let dragDepth = 0;
+
+        const hasExternalFiles = (e) => {
+          if (isInternalCardDragging || !e.dataTransfer) return false;
+          const types = Array.from(e.dataTransfer.types || []);
+          return types.includes('Files') && !types.includes('application/x-conti-card');
+        };
+
         window.addEventListener('dragenter', (e) => {
-          if (!isExternalFileDrag(e)) return;
+          if (!hasExternalFiles(e)) return;
           e.preventDefault();
-          externalDragCounter++;
-          els.globalFileDropOverlay.classList.remove('hidden');
+          dragDepth++;
+          els.globalDropOverlay.classList.remove('hidden');
         });
 
         window.addEventListener('dragover', (e) => {
-          if (!isExternalFileDrag(e)) return;
+          if (!hasExternalFiles(e)) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = 'copy';
         });
 
         window.addEventListener('dragleave', (e) => {
-          if (!isExternalFileDrag(e)) return;
-          e.preventDefault();
-          externalDragCounter = Math.max(0, externalDragCounter - 1);
-          if (externalDragCounter === 0) {
-            els.globalFileDropOverlay.classList.add('hidden');
+          if (!hasExternalFiles(e)) return;
+          dragDepth = Math.max(0, dragDepth - 1);
+          if (dragDepth === 0) {
+            els.globalDropOverlay.classList.add('hidden');
           }
         });
 
         window.addEventListener('drop', (e) => {
-          if (!isExternalFileDrag(e)) return;
+          dragDepth = 0;
+          els.globalDropOverlay.classList.add('hidden');
+          if (!hasExternalFiles(e)) return;
           e.preventDefault();
-          externalDragCounter = 0;
-          els.globalFileDropOverlay.classList.add('hidden');
-
-          if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-            const addToConti = state.activeTab !== 'db';
-            handleUploadedFiles(e.dataTransfer.files, { addToConti });
+          const files = e.dataTransfer?.files;
+          if (files && files.length > 0) {
+            handleUploadedFiles(files, { addToConti: state.activeTab !== 'db' });
           }
         });
       }
 
       /* =======================================================
-         12. TAB 1: 콘티 곡 리스트 렌더링 & 내부 드래그 앤 드롭 순서 변경
+         12. TAB 1: 콘티 곡 리스트 렌더링 및 순서 이동
       ======================================================= */
-      function moveContiItem(fromIndex, toIndex) {
-        if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
-        if (fromIndex >= state.conti.items.length || toIndex >= state.conti.items.length) return;
-        const [moved] = state.conti.items.splice(fromIndex, 1);
-        state.conti.items.splice(toIndex, 0, moved);
+      function moveContiItem(fromIdx, toIdx) {
+        const items = state.conti.items;
+        if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0 || fromIdx >= items.length || toIdx >= items.length) {
+          return;
+        }
+        const [moved] = items.splice(fromIdx, 1);
+        items.splice(toIdx, 0, moved);
         markDirty();
         renderContiList();
         renderPreview();
@@ -2839,12 +2866,10 @@ create policy "praise_sheets_delete_own" on storage.objects
           return;
         }
 
-        const pages = [];
-        for (let i = 0; i < items.length; i += perPage) {
-          pages.push(items.slice(i, i + perPage));
-        }
+        const pages = buildContiPages(items, L);
+        const hasCustomPages = pages.some((p) => p.isOverridden);
 
-        els.previewSummaryText.textContent = `${orientLabel} · 페이지당 ${perPage}열 · 총 ${pages.length}페이지 (${items.length}곡)`;
+        els.previewSummaryText.textContent = `${orientLabel} · 기본 ${perPage}열${hasCustomPages ? ' (페이지별 개별 적용)' : ''} · 총 ${pages.length}페이지 (${items.length}곡)`;
         els.previewPagesContainer.innerHTML = '';
 
         const imgFilter = [
@@ -2855,13 +2880,37 @@ create policy "praise_sheets_delete_own" on storage.objects
 
         const headerFontSize = Number(L.headerFontSize) || 12;
 
-        pages.forEach((pageItems, pageIndex) => {
+        pages.forEach((pageObj, pageIndex) => {
+          const pageItems = pageObj.items;
+          const pageCols = pageObj.cols;
           const wrapper = document.createElement('div');
           wrapper.className = 'a4-page-wrapper flex flex-col items-center';
 
           const metaBadge = document.createElement('div');
           metaBadge.className = 'a4-page-meta-badge mb-1.5 text-[11px] font-semibold text-slate-500 flex items-center gap-2';
-          metaBadge.innerHTML = `<span>페이지 ${pageIndex + 1} / ${pages.length}</span>`;
+          metaBadge.innerHTML = `
+            <span>페이지 ${pageIndex + 1} / ${pages.length}</span>
+            <span class="text-slate-300">·</span>
+            <div class="inline-flex items-center bg-white/90 border border-slate-200 rounded-lg p-0.5 shadow-2xs" title="이 페이지에 배치할 곡 수 선택">
+              ${[1, 2, 3].map((n) => `
+                <button
+                  type="button"
+                  data-page-index="${pageIndex}"
+                  data-cols="${n}"
+                  class="btn-page-cols px-2 py-0.5 rounded-md text-[10px] font-bold transition cursor-pointer ${
+                    pageCols === n
+                      ? 'bg-brand-600 text-white shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                  }"
+                >${n}곡</button>
+              `).join('')}
+            </div>
+          `;
+          metaBadge.querySelectorAll('.btn-page-cols').forEach((btn) => {
+            btn.addEventListener('click', () => {
+              setPagePerPageOverride(Number(btn.dataset.pageIndex), Number(btn.dataset.cols));
+            });
+          });
           wrapper.appendChild(metaBadge);
 
           const scaleBox = document.createElement('div');
@@ -2886,10 +2935,10 @@ create policy "praise_sheets_delete_own" on storage.objects
             sheet.appendChild(headerEl);
           }
 
-          // 2) 가로 병렬 그리드 (1열 / 2열 / 3열)
+          // 2) 가로 병렬 그리드 (페이지별 열 수 적용: 1열 / 2열 / 3열)
           const gridEl = document.createElement('div');
           gridEl.className = 'flex-1 min-h-0 grid';
-          gridEl.style.gridTemplateColumns = `repeat(${perPage}, minmax(0, 1fr))`;
+          gridEl.style.gridTemplateColumns = `repeat(${pageCols}, minmax(0, 1fr))`;
           gridEl.style.columnGap = `${L.gapMm}mm`;
 
           pageItems.forEach((item) => {
@@ -2953,11 +3002,11 @@ create policy "praise_sheets_delete_own" on storage.objects
       /**
        * 현재 A4 레이아웃 설정(방향, 열 수, 제목/글자크기, 라벨, 여백/간격, 필터)을
        * 200 DPI 고해상도 캔버스에 그대로 그려 PDF 페이지로 변환할 수 있게 합니다.
-       */
-      async function renderA4PageToCanvas(pageItems, pageIndex, totalPages) {
+      async function renderA4PageToCanvas(pageObj, pageIndex, totalPages) {
+        const pageItems = pageObj.items;
         const L = state.conti.layout;
         const isLandscape = L.orientation === 'landscape';
-        const perPage = Number(L.perPage) || 1;
+        const perPage = Number(pageObj.cols) || Number(L.perPage) || 1;
 
         const pageMmW = isLandscape ? 297 : 210;
         const pageMmH = isLandscape ? 210 : 297;
@@ -3091,13 +3140,9 @@ create policy "praise_sheets_delete_own" on storage.objects
 
         const items = state.conti.items;
         const L = state.conti.layout;
-        const perPage = Number(L.perPage) || 1;
         const isLandscape = L.orientation === 'landscape';
 
-        const pages = [];
-        for (let i = 0; i < items.length; i += perPage) {
-          pages.push(items.slice(i, i + perPage));
-        }
+        const pages = buildContiPages(items, L);
 
         const { jsPDF } = window.jspdf;
         const pdf = new jsPDF({
@@ -3147,7 +3192,9 @@ create policy "praise_sheets_delete_own" on storage.objects
         })();
 
         const L = state.conti.layout;
-        const pageCount = Math.ceil(state.conti.items.length / (Number(L.perPage) || 1));
+        const pages = buildContiPages(state.conti.items, L);
+        const pageCount = pages.length;
+        const hasCustomPages = pages.some((p) => p.isOverridden);
         const savedPattern = loadPdfFilenamePattern();
         const initialBaseName = buildPdfFilenameFromPattern(savedPattern);
         const supportsSavePicker = typeof window.showSaveFilePicker === 'function' && !isInIframe;
@@ -3158,7 +3205,7 @@ create policy "praise_sheets_delete_own" on storage.objects
           bodyHtml: `
             <div class="space-y-3.5">
               <div class="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-600 flex items-center justify-between">
-                <span>A4 ${L.orientation === 'landscape' ? '가로 (297×210mm)' : '세로 (210×297mm)'} · 페이지당 ${L.perPage}열</span>
+                <span>A4 ${L.orientation === 'landscape' ? '가로 (297×210mm)' : '세로 (210×297mm)'} · ${hasCustomPages ? '페이지별 개별 배치' : `페이지당 ${L.perPage}열`}</span>
                 <strong class="text-slate-900">총 ${pageCount}페이지 (${state.conti.items.length}곡)</strong>
               </div>
 
@@ -4888,6 +4935,7 @@ create policy "praise_sheets_delete_own" on storage.objects
         els.perpageBtns.forEach((btn) => {
           btn.addEventListener('click', () => {
             state.conti.layout.perPage = Number(btn.dataset.perpage);
+            state.conti.layout.pageOverrides = {};
             saveLastLayout(state.conti.layout);
             markDirty();
             syncLayoutControlsFromState();
