@@ -3846,7 +3846,10 @@ create policy "praise_sheets_delete_own" on storage.objects
           console.warn('Supabase 설정 읽기 실패:', err);
         }
 
-        const url = (DEFAULT_SUPABASE_URL || savedUrl).replace(/\/+$/, '').trim();
+        const url = (DEFAULT_SUPABASE_URL || savedUrl)
+          .replace(/\/rest\/v1\/?$/i, '')
+          .replace(/\/+$/, '')
+          .trim();
         const anonKey = (DEFAULT_SUPABASE_ANON_KEY || savedKey).trim();
         return {
           url,
@@ -3860,7 +3863,10 @@ create policy "praise_sheets_delete_own" on storage.objects
           localStorage.setItem(
             SUPABASE_CONFIG_KEY,
             JSON.stringify({
-              url: String(url || '').replace(/\/+$/, '').trim(),
+              url: String(url || '')
+                .replace(/\/rest\/v1\/?$/i, '')
+                .replace(/\/+$/, '')
+                .trim(),
               anonKey: String(anonKey || '').trim()
             })
           );
