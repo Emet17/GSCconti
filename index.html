@@ -2015,13 +2015,10 @@
           confirmLabel: `${ids.length}개 삭제`,
           danger: true,
           onConfirm: async () => {
+            const targets = ids.map((id) => getSheetById(id)).filter(Boolean);
             for (const id of ids) {
-              const sheet = getSheetById(id);
               await idbDelete('sheets', id);
               revokeSheetUrls(id);
-              if (state.cloud.user && sheet) {
-                deleteSheetFromCloud(sheet).catch(() => {});
-              }
             }
             const idSet = new Set(ids);
             state.dbSheets = state.dbSheets.filter((s) => !idSet.has(s.id));
@@ -2029,7 +2026,18 @@
             renderDbList();
             renderContiList();
             renderPreview();
-            showToast(`선택한 악보 ${ids.length}개를 삭제했습니다.`, 'info');
+
+            if (state.cloud.user && targets.length > 0) {
+              try {
+                await deleteSheetsBatchFromCloud(targets);
+                showToast(`선택한 악보 ${ids.length}개를 클라우드까지 완전히 삭제했습니다.`, 'info');
+              } catch (err) {
+                lastCloudSyncError = err?.message || '클라우드 삭제 실패';
+                showToast(`로컬 삭제 완료, 클라우드 삭제 오류: ${lastCloudSyncError}`, 'warning', 4500);
+              }
+            } else {
+              showToast(`선택한 악보 ${ids.length}개를 삭제했습니다.`, 'info');
+            }
           }
         });
       }
@@ -2086,11 +2094,59 @@
             revokeSheetUrls(sheet.id);
             state.dbSheets = state.dbSheets.filter((s) => s.id !== sheet.id);
             state.selectedDbSheetIds.delete(sheet.id);
-            if (state.cloud.user) deleteSheetFromCloud(sheet).catch(() => {});
             renderDbList();
             renderContiList();
             renderPreview();
-            showToast('악보를 삭제했습니다.', 'info');
+
+            if (state.cloud.user) {
+              try {
+                await deleteSheetFromCloud(sheet);
+                showToast('악보를 클라우드까지 완전히 삭제했습니다.', 'info');
+              } catch (err) {
+                lastCloudSyncError = err?.message || '클라우드 삭제 실패';
+                showToast(`클라우드 삭제 오류: ${lastCloudSyncError}`, 'warning', 4500);
+              }
+            } else {
+              showToast('악보를 삭제했습니다.', 'info');
+            }
+          }
+        });
+      }
+
+      function clearAllDbSheets() {
+        const count = state.dbSheets.length;
+        if (count === 0) return;
+        openConfirmModal({
+          title: '악보 DB 전체 초기화',
+          message: `저장된 악보 ${count}개를 모두 영구 삭제하시겠습니까?\n클라우드에 로그인된 경우 모든 기기에서도 함께 삭제됩니다.`,
+          confirmLabel: '전체 초기화',
+          danger: true,
+          onConfirm: async () => {
+            const toDeleteCloud = state.cloud.user ? [...state.dbSheets] : [];
+            await idbClear('sheets');
+            revokeAllSheetUrls();
+            failedSheetDownloadMap.clear();
+            sheetSignedFallbackMap.clear();
+            state.dbSheets = [];
+            state.selectedDbSheetIds.clear();
+            state.dbSearchQuery = '';
+            els.dbSearchInput.value = '';
+            renderDbList();
+            renderContiList();
+            renderPreview();
+
+            if (state.cloud.user) {
+              showToast('클라우드 악보 DB도 초기화하는 중입니다...', 'info', 3000);
+              try {
+                await clearAllSheetsFromCloud(toDeleteCloud);
+                showToast(`악보 DB(${count}개)를 클라우드까지 완전히 초기화했습니다.`, 'success');
+              } catch (err) {
+                lastCloudSyncError = err?.message || '클라우드 초기화 실패';
+                showToast(`클라우드 초기화 오류: ${lastCloudSyncError}`, 'error', 5000);
+              }
+            } else {
+              showToast(`악보 DB(${count}개)를 모두 초기화했습니다.`, 'info');
+            }
           }
         });
       }
@@ -2437,9 +2493,19 @@
               state.isDirty = true;
               syncHeaderAndMeta();
             }
-            if (state.cloud.user) deleteContiFromCloud(saved.id).catch(() => {});
             renderSavedContiList();
-            showToast('콘티를 삭제했습니다.', 'info');
+
+            if (state.cloud.user) {
+              try {
+                await deleteContiFromCloud(saved.id);
+                showToast('콘티를 클라우드까지 완전히 삭제했습니다.', 'info');
+              } catch (err) {
+                lastCloudSyncError = err?.message || '클라우드 콘티 삭제 실패';
+                showToast(`클라우드 콘티 삭제 오류: ${lastCloudSyncError}`, 'warning', 4500);
+              }
+            } else {
+              showToast('콘티를 삭제했습니다.', 'info');
+            }
           }
         });
       }
@@ -4139,7 +4205,81 @@
         if (paths.length > 0) {
           await state.cloud.client.storage.from(CLOUD_BUCKET).remove(paths).catch(() => {});
         }
-        await state.cloud.client.from('sheets').delete().eq('id', sheet.id);
+        const { error } = await state.cloud.client
+          .from('sheets')
+          .delete()
+          .eq('id', sheet.id)
+          .eq('user_id', uid);
+        if (error) throw error;
+      }
+
+      async function deleteSheetsBatchFromCloud(sheets) {
+        if (!state.cloud.client || !state.cloud.user || !sheets || sheets.length === 0) return;
+        const uid = state.cloud.user.id;
+        const ids = sheets.map((s) => s.id);
+        const paths = Array.from(
+          new Set(
+            sheets.flatMap((s) =>
+              [
+                cleanStoragePath(s.cloudImagePath),
+                cleanStoragePath(s.cloudThumbPath),
+                `${uid}/${s.id}.jpg`,
+                `${uid}/${s.id}_thumb.jpg`
+              ].filter(Boolean)
+            )
+          )
+        );
+        if (paths.length > 0) {
+          await state.cloud.client.storage.from(CLOUD_BUCKET).remove(paths).catch(() => {});
+        }
+        const { error } = await state.cloud.client
+          .from('sheets')
+          .delete()
+          .in('id', ids)
+          .eq('user_id', uid);
+        if (error) throw error;
+      }
+
+      async function clearAllSheetsFromCloud(localSheets = []) {
+        if (!state.cloud.client || !state.cloud.user) return;
+        const uid = state.cloud.user.id;
+
+        // 1) DB의 본인 계정 악보 레코드 전체 삭제
+        const { error: dbErr } = await state.cloud.client
+          .from('sheets')
+          .delete()
+          .eq('user_id', uid);
+        if (dbErr) throw dbErr;
+
+        // 2) 스토리지 내 본인 폴더 파일 목록 조회 후 일괄 삭제
+        const pathSet = new Set();
+        localSheets.forEach((s) => {
+          [
+            cleanStoragePath(s.cloudImagePath),
+            cleanStoragePath(s.cloudThumbPath),
+            `${uid}/${s.id}.jpg`,
+            `${uid}/${s.id}_thumb.jpg`
+          ]
+            .filter(Boolean)
+            .forEach((p) => pathSet.add(p));
+        });
+
+        try {
+          const { data: listed } = await state.cloud.client.storage
+            .from(CLOUD_BUCKET)
+            .list(uid, { limit: 1000 });
+          if (Array.isArray(listed)) {
+            listed.forEach((f) => {
+              if (f && f.name) pathSet.add(`${uid}/${f.name}`);
+            });
+          }
+        } catch {}
+
+        const allPaths = Array.from(pathSet);
+        for (let i = 0; i < allPaths.length; i += 100) {
+          const chunk = allPaths.slice(i, i + 100);
+          await state.cloud.client.storage.from(CLOUD_BUCKET).remove(chunk).catch(() => {});
+        }
       }
 
       async function pushContiToCloud(conti) {
@@ -4165,22 +4305,56 @@
 
       async function deleteContiFromCloud(contiId) {
         if (!state.cloud.client || !state.cloud.user || !contiId) return;
-        await state.cloud.client.from('contis').delete().eq('id', contiId);
+        const uid = state.cloud.user.id;
+        const { error } = await state.cloud.client
+          .from('contis')
+          .delete()
+          .eq('id', contiId)
+          .eq('user_id', uid);
+        if (error) throw error;
       }
+
+      let lastAutoSyncAt = 0;
 
       async function syncCloudBidirectional(silent = false, { forceRedownloadImages = false } = {}) {
         if (!state.cloud.client || !state.cloud.user || state.cloud.isSyncing) return;
         state.cloud.isSyncing = true;
+        lastAutoSyncAt = Date.now();
         updateCloudAndAuthGateUI();
 
         try {
           const uid = state.cloud.user.id;
           let uploadErrorMsg = '';
           let uploadFailCount = 0;
+          let prunedSheetsCount = 0;
+          let prunedContisCount = 0;
 
-          // 1) 로컬 미동기화 항목 병렬 업로드 (개별 오류 격리)
-          const dirtySheets = state.dbSheets.filter((s) => (!s.cloudSynced || s.cloudOwnerId !== uid) && isValidImageBlob(s.blob));
-          const dirtyContis = state.dbContis.filter((c) => !c.cloudSynced || c.cloudOwnerId !== uid);
+          // 0) 다른 계정으로 로그인했던 잔여 로컬 캐시 정리 (계정 혼재 방지)
+          const foreignSheets = state.dbSheets.filter((s) => s.cloudOwnerId && s.cloudOwnerId !== uid);
+          for (const fs of foreignSheets) {
+            await idbDelete('sheets', fs.id);
+            revokeSheetUrls(fs.id);
+          }
+          if (foreignSheets.length > 0) {
+            const fSet = new Set(foreignSheets.map((s) => s.id));
+            state.dbSheets = state.dbSheets.filter((s) => !fSet.has(s.id));
+          }
+          const foreignContis = state.dbContis.filter((c) => c.cloudOwnerId && c.cloudOwnerId !== uid);
+          for (const fc of foreignContis) {
+            await idbDelete('contis', fc.id);
+          }
+          if (foreignContis.length > 0) {
+            const fcSet = new Set(foreignContis.map((c) => c.id));
+            state.dbContis = state.dbContis.filter((c) => !fcSet.has(c.id));
+          }
+
+          // 1) 로컬 미동기화 항목 병렬 업로드 (신규/수정된 본인 또는 미소속 로컬 항목만)
+          const dirtySheets = state.dbSheets.filter(
+            (s) => !s.cloudSynced && (!s.cloudOwnerId || s.cloudOwnerId === uid) && isValidImageBlob(s.blob)
+          );
+          const dirtyContis = state.dbContis.filter(
+            (c) => !c.cloudSynced && (!c.cloudOwnerId || c.cloudOwnerId === uid)
+          );
 
           await Promise.all([
             runWithConcurrency(dirtySheets, 4, async (s) => {
@@ -4205,15 +4379,52 @@
 
           // 2) 클라우드 DB 메타데이터(악보 목록 + 콘티 목록) 동시 조회
           const [sheetsRes, contisRes] = await Promise.all([
-            state.cloud.client.from('sheets').select('*').order('updated_at', { ascending: false }),
-            state.cloud.client.from('contis').select('*').order('updated_at', { ascending: false })
+            state.cloud.client.from('sheets').select('*').eq('user_id', uid).order('updated_at', { ascending: false }),
+            state.cloud.client.from('contis').select('*').eq('user_id', uid).order('updated_at', { ascending: false })
           ]);
           if (sheetsRes.error) throw sheetsRes.error;
           if (contisRes.error) throw contisRes.error;
 
           const remoteSheets = sheetsRes.data || [];
           const remoteContis = contisRes.data || [];
+          const remoteSheetIds = new Set(remoteSheets.map((r) => r.id));
+          const remoteContiIds = new Set(remoteContis.map((r) => r.id));
           let changed = false;
+
+          // 2-1) 원격에서 삭제/초기화된 항목을 로컬에서도 제거 (Pruning)
+          const sheetsToPrune = state.dbSheets.filter(
+            (s) => s.cloudSynced && s.cloudOwnerId === uid && !remoteSheetIds.has(s.id)
+          );
+          if (sheetsToPrune.length > 0) {
+            for (const s of sheetsToPrune) {
+              await idbDelete('sheets', s.id);
+              revokeSheetUrls(s.id);
+              failedSheetDownloadMap.delete(s.id);
+              sheetSignedFallbackMap.delete(s.id);
+              state.selectedDbSheetIds.delete(s.id);
+            }
+            const pruneSet = new Set(sheetsToPrune.map((s) => s.id));
+            state.dbSheets = state.dbSheets.filter((s) => !pruneSet.has(s.id));
+            prunedSheetsCount = sheetsToPrune.length;
+            changed = true;
+          }
+
+          const contisToPrune = state.dbContis.filter(
+            (c) => c.cloudSynced && c.cloudOwnerId === uid && !remoteContiIds.has(c.id)
+          );
+          if (contisToPrune.length > 0) {
+            for (const c of contisToPrune) {
+              await idbDelete('contis', c.id);
+              if (state.conti.id === c.id) {
+                state.conti.id = null;
+                syncHeaderAndMeta();
+              }
+            }
+            const pruneContiSet = new Set(contisToPrune.map((c) => c.id));
+            state.dbContis = state.dbContis.filter((c) => !pruneContiSet.has(c.id));
+            prunedContisCount = contisToPrune.length;
+            changed = true;
+          }
 
           // 3) 콘티 목록 즉시 반영
           for (const rc of remoteContis) {
@@ -4296,6 +4507,12 @@
             state.dbContis.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
           }
 
+          // 삭제·목록 변경사항을 먼저 즉시 화면에 반영
+          renderDbList();
+          renderSavedContiList();
+          renderContiList();
+          renderPreview();
+
           // 5) 현재 콘티 + 악보 DB의 미수신 이미지 병렬 다운로드
           if (forceRedownloadImages) {
             failedSheetDownloadMap.clear();
@@ -4319,12 +4536,10 @@
                 dlFailed += 1;
               }
             });
+            renderDbList();
+            renderContiList();
+            renderPreview();
           }
-
-          renderDbList();
-          renderSavedContiList();
-          renderContiList();
-          renderPreview();
 
           if (!silent) {
             if (uploadFailCount > 0) {
@@ -4334,7 +4549,9 @@
               showToast(`악보 이미지 ${dlFailed}건 다운로드 실패: ${lastCloudSyncError || '스토리지 확인 필요'}`, 'warning', 5500);
             } else {
               lastCloudSyncError = '';
-              showToast(`동기화 완료 (악보 ${state.dbSheets.length}개 · 콘티 ${state.dbContis.length}개)`, 'success');
+              const prunedTotal = prunedSheetsCount + prunedContisCount;
+              const prunedText = prunedTotal > 0 ? ` · 원격 삭제 ${prunedTotal}건 반영` : '';
+              showToast(`동기화 완료 (악보 ${state.dbSheets.length}개 · 콘티 ${state.dbContis.length}개${prunedText})`, 'success');
             }
           }
         } catch (err) {
@@ -4648,6 +4865,17 @@
         els.modalCloseX.addEventListener('click', closeModal);
         els.modalBackdrop.addEventListener('click', (e) => {
           if (e.target === els.modalBackdrop) closeModal();
+        });
+
+        // 브라우저 탭/창으로 다시 돌아왔을 때 자동 동기화 (5초 쿨다운)
+        const triggerBackgroundSyncOnReturn = () => {
+          if (!state.cloud.client || !state.cloud.user || state.cloud.isSyncing) return;
+          if (Date.now() - lastAutoSyncAt < 5000) return;
+          syncCloudBidirectional(true).catch(() => {});
+        };
+        window.addEventListener('focus', triggerBackgroundSyncOnReturn);
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') triggerBackgroundSyncOnReturn();
         });
 
         // 전역 파일 드래그 앤 드롭 (OS 파일 탐색기 -> 창 어디든 드롭)
