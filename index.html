@@ -2151,33 +2151,6 @@
         });
       }
 
-      function clearAllDbSheets() {
-        const count = state.dbSheets.length;
-        if (count === 0) return;
-        openConfirmModal({
-          title: '악보 DB 전체 초기화',
-          message: `저장된 악보 ${count}개를 모두 영구 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`,
-          confirmLabel: '전체 초기화',
-          danger: true,
-          onConfirm: async () => {
-            const toDeleteCloud = state.cloud.user ? [...state.dbSheets] : [];
-            await idbClear('sheets');
-            revokeAllSheetUrls();
-            state.dbSheets = [];
-            state.selectedDbSheetIds.clear();
-            state.dbSearchQuery = '';
-            els.dbSearchInput.value = '';
-            for (const s of toDeleteCloud) {
-              deleteSheetFromCloud(s).catch(() => {});
-            }
-            renderDbList();
-            renderContiList();
-            renderPreview();
-            showToast(`악보 DB(${count}개)를 모두 초기화했습니다.`, 'info');
-          }
-        });
-      }
-
       function syncDbBulkBar(filtered) {
         const existingSet = new Set(state.dbSheets.map((s) => s.id));
         Array.from(state.selectedDbSheetIds).forEach((id) => {
