@@ -1358,12 +1358,51 @@ create policy "sheet_images_owner_delete" on storage.objects
       const sheetImageUrlMap = new Map();
       const sheetThumbUrlMap = new Map();
       const croppedUrlCache = new Map();
+      const inflightFullDownloadMap = new Map();
 
       function getSheetById(sheetId) {
         return state.dbSheets.find((s) => s.id === sheetId) || null;
       }
 
-      function getSheetImageUrl(sheetId) {
+      async function ensureSheetFullBlob(sheetId, { silent = true } = {}) {
+        const sheet = getSheetById(sheetId);
+        if (!sheet) return null;
+        if (sheet.blob instanceof Blob) return sheet.blob;
+        if (!sheet.cloudImagePath || !state.cloud.client || !state.cloud.user) return null;
+
+        if (inflightFullDownloadMap.has(sheetId)) {
+          return inflightFullDownloadMap.get(sheetId);
+        }
+
+        const task = (async () => {
+          try {
+            const { data: dlMain, error } = await state.cloud.client.storage
+              .from(CLOUD_BUCKET)
+              .download(sheet.cloudImagePath);
+            if (error || !dlMain) throw error || new Error('원본 다운로드 실패');
+
+            sheet.blob = dlMain;
+            if (!(sheet.thumbnailBlob instanceof Blob)) {
+              sheet.thumbnailBlob = dlMain;
+            }
+            if (!sheet.fileSize) sheet.fileSize = dlMain.size || 0;
+
+            await idbPut('sheets', sheet);
+            revokeSheetUrls(sheetId);
+            return dlMain;
+          } catch (err) {
+            if (!silent) showToast('고화질 악보 원본을 불러오지 못했습니다.', 'warning');
+            return null;
+          } finally {
+            inflightFullDownloadMap.delete(sheetId);
+          }
+        })();
+
+        inflightFullDownloadMap.set(sheetId, task);
+        return task;
+      }
+
+      function getSheetImageUrl(sheetId, onLoaded = null) {
         if (sheetImageUrlMap.has(sheetId)) return sheetImageUrlMap.get(sheetId);
         const sheet = getSheetById(sheetId);
         if (!sheet) return '';
@@ -1371,6 +1410,12 @@ create policy "sheet_images_owner_delete" on storage.objects
           const url = URL.createObjectURL(sheet.blob);
           sheetImageUrlMap.set(sheetId, url);
           return url;
+        }
+        if (sheet.cloudImagePath && state.cloud.client && state.cloud.user) {
+          ensureSheetFullBlob(sheetId).then((blob) => {
+            if (blob && typeof onLoaded === 'function') onLoaded();
+          });
+          return getSheetThumbUrl(sheetId);
         }
         return sheet.tempUrl || '';
       }
@@ -1640,7 +1685,13 @@ create policy "sheet_images_owner_delete" on storage.objects
       }
 
       function openSheetZoomModal(sheetId, title) {
-        const url = getSheetImageUrl(sheetId);
+        const sheet = getSheetById(sheetId);
+        const needsFull = sheet && !(sheet.blob instanceof Blob) && sheet.cloudImagePath;
+        const url = getSheetImageUrl(sheetId, () => {
+          const zoomImg = document.getElementById('modal-zoom-sheet-img');
+          const latestUrl = getSheetImageUrl(sheetId);
+          if (zoomImg && latestUrl) zoomImg.src = latestUrl;
+        });
         if (!url) {
           showToast('악보 이미지를 찾을 수 없습니다.', 'warning');
           return;
@@ -1649,8 +1700,9 @@ create policy "sheet_images_owner_delete" on storage.objects
           title: title || '악보 크게 보기',
           maxWidth: 'max-w-3xl',
           bodyHtml: `
-            <div class="bg-slate-100 rounded-xl p-2 flex items-center justify-center max-h-[70vh] overflow-auto">
-              <img src="${url}" alt="${escapeHtml(title || '악보')}" class="max-w-full h-auto rounded-lg shadow-sm" />
+            <div class="bg-slate-100 rounded-xl p-2 flex flex-col items-center justify-center max-h-[70vh] overflow-auto">
+              ${needsFull ? `<div class="text-[11px] text-brand-700 font-semibold mb-1.5">고화질 원본을 불러오는 중입니다...</div>` : ''}
+              <img id="modal-zoom-sheet-img" src="${url}" alt="${escapeHtml(title || '악보')}" class="max-w-full h-auto rounded-lg shadow-sm" />
             </div>
           `,
           buttons: [{ label: '닫기', variant: 'secondary', onClick: closeModal }]
@@ -2511,7 +2563,7 @@ create policy "sheet_images_owner_delete" on storage.objects
       }
 
       function ensureCroppedImageUrl(item, onReady) {
-        const baseUrl = getSheetImageUrl(item.sheetId);
+        const baseUrl = getSheetImageUrl(item.sheetId, onReady);
         if (!baseUrl) return '';
         if (!hasValidCrop(item.crop)) return baseUrl;
 
@@ -2589,12 +2641,23 @@ create policy "sheet_images_owner_delete" on storage.objects
         const padY = Math.max(4, Math.round(h * 0.015));
         const x0 = Math.max(0, minX - padX) / w;
         const y0 = Math.max(0, minY - padY) / h;
-        const x1 = Math.min(w, maxX + padX) / w;
-        const y1 = Math.min(h, maxY + padY) / h;
-        return { x: x0, y: y0, w: Math.max(0.08, x1 - x0), h: Math.max(0.08, y1 - y0) };
+        const x1 = Math.min(w, maxX + padX + 1) / w;
+        const y1 = Math.min(h, maxY + padY + 1) / h;
+
+        return {
+          x: x0,
+          y: y0,
+          w: Math.max(0.08, x1 - x0),
+          h: Math.max(0.08, y1 - y0)
+        };
       }
 
-      function openCropSheetModal(item) {
+      async function openCropSheetModal(item) {
+        const sheet = getSheetById(item.sheetId);
+        if (sheet && !(sheet.blob instanceof Blob) && sheet.cloudImagePath) {
+          showToast('고화질 원본 악보를 불러오는 중...', 'info', 1800);
+          await ensureSheetFullBlob(item.sheetId, { silent: false });
+        }
         const baseUrl = getSheetImageUrl(item.sheetId);
         if (!baseUrl) {
           showToast('자를 악보 이미지를 찾을 수 없습니다.', 'warning');
@@ -3344,6 +3407,7 @@ create policy "sheet_images_owner_delete" on storage.objects
 
             for (let colIdx = 0; colIdx < pageItems.length; colIdx++) {
               const item = pageItems[colIdx];
+              await ensureSheetFullBlob(item.sheetId, { silent: true });
               const baseUrl = getSheetImageUrl(item.sheetId);
               if (!baseUrl) continue;
 
@@ -3875,20 +3939,28 @@ create policy "sheet_images_owner_delete" on storage.objects
       async function pushSheetToCloud(sheet) {
         if (!state.cloud.client || !state.cloud.user || !sheet) return;
         const uid = state.cloud.user.id;
-        const imagePath = `${uid}/${sheet.id}.jpg`;
-        const thumbPath = `${uid}/${sheet.id}_thumb.jpg`;
+        const imagePath = sheet.cloudImagePath || `${uid}/${sheet.id}.jpg`;
+        const thumbPath = sheet.cloudThumbPath || `${uid}/${sheet.id}_thumb.jpg`;
 
+        const uploadTasks = [];
         if (sheet.blob instanceof Blob) {
-          const { error: upErr } = await state.cloud.client.storage
-            .from(CLOUD_BUCKET)
-            .upload(imagePath, sheet.blob, { contentType: 'image/jpeg', upsert: true });
-          if (upErr) throw upErr;
+          uploadTasks.push(
+            state.cloud.client.storage
+              .from(CLOUD_BUCKET)
+              .upload(imagePath, sheet.blob, { contentType: 'image/jpeg', upsert: true })
+              .then(({ error }) => { if (error) throw error; })
+          );
         }
         const thumbSrc = sheet.thumbnailBlob instanceof Blob ? sheet.thumbnailBlob : sheet.blob;
         if (thumbSrc instanceof Blob) {
-          await state.cloud.client.storage
-            .from(CLOUD_BUCKET)
-            .upload(thumbPath, thumbSrc, { contentType: 'image/jpeg', upsert: true });
+          uploadTasks.push(
+            state.cloud.client.storage
+              .from(CLOUD_BUCKET)
+              .upload(thumbPath, thumbSrc, { contentType: 'image/jpeg', upsert: true })
+          );
+        }
+        if (uploadTasks.length > 0) {
+          await Promise.all(uploadTasks);
         }
 
         const { error: dbErr } = await state.cloud.client.from('sheets').upsert({
@@ -3907,6 +3979,8 @@ create policy "sheet_images_owner_delete" on storage.objects
         });
         if (dbErr) throw dbErr;
 
+        sheet.cloudImagePath = imagePath;
+        sheet.cloudThumbPath = thumbPath;
         sheet.cloudSynced = true;
         sheet.cloudOwnerId = uid;
         await idbPut('sheets', sheet);
@@ -3943,6 +4017,18 @@ create policy "sheet_images_owner_delete" on storage.objects
         await state.cloud.client.from('contis').delete().eq('id', contiId);
       }
 
+      async function runWithConcurrency(items, limit, workerFn) {
+        if (!items || items.length === 0) return;
+        let cursor = 0;
+        const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+          while (cursor < items.length) {
+            const currentIdx = cursor++;
+            await workerFn(items[currentIdx], currentIdx);
+          }
+        });
+        await Promise.all(runners);
+      }
+
       async function syncCloudBidirectional(silent = false) {
         if (!state.cloud.client || !state.cloud.user || state.cloud.isSyncing) return;
         state.cloud.isSyncing = true;
@@ -3951,72 +4037,29 @@ create policy "sheet_images_owner_delete" on storage.objects
         try {
           const uid = state.cloud.user.id;
 
-          // 1) 로컬 미동기화 항목 먼저 업로드
-          for (const s of state.dbSheets) {
-            if (!s.cloudSynced || s.cloudOwnerId !== uid) {
-              await pushSheetToCloud(s);
-            }
-          }
-          for (const c of state.dbContis) {
-            if (!c.cloudSynced || c.cloudOwnerId !== uid) {
-              await pushContiToCloud(c);
-            }
-          }
+          // 1) 로컬 미동기화 항목 병렬 업로드 (동시 4개)
+          const dirtySheets = state.dbSheets.filter((s) => (!s.cloudSynced || s.cloudOwnerId !== uid) && (s.blob instanceof Blob));
+          const dirtyContis = state.dbContis.filter((c) => !c.cloudSynced || c.cloudOwnerId !== uid);
 
-          // 2) 클라우드에서 최신 목록 가져오기
-          const { data: remoteSheets, error: sErr } = await state.cloud.client
-            .from('sheets')
-            .select('*')
-            .order('updated_at', { ascending: false });
-          if (sErr) throw sErr;
+          await Promise.all([
+            runWithConcurrency(dirtySheets, 4, (s) => pushSheetToCloud(s)),
+            runWithConcurrency(dirtyContis, 4, (c) => pushContiToCloud(c))
+          ]);
 
+          // 2) 클라우드 DB 메타데이터(악보 목록 + 콘티 목록) 동시 조회
+          const [sheetsRes, contisRes] = await Promise.all([
+            state.cloud.client.from('sheets').select('*').order('updated_at', { ascending: false }),
+            state.cloud.client.from('contis').select('*').order('updated_at', { ascending: false })
+          ]);
+          if (sheetsRes.error) throw sheetsRes.error;
+          if (contisRes.error) throw contisRes.error;
+
+          const remoteSheets = sheetsRes.data || [];
+          const remoteContis = contisRes.data || [];
           let changed = false;
-          for (const rs of remoteSheets || []) {
-            const local = getSheetById(rs.id);
-            if (!local || (rs.updated_at || 0) > (local.updatedAt || 0)) {
-              let blob = local?.blob || null;
-              let thumbnailBlob = local?.thumbnailBlob || null;
-              if (!blob || (rs.updated_at || 0) > (local?.updatedAt || 0)) {
-                const { data: dlMain } = await state.cloud.client.storage.from(CLOUD_BUCKET).download(rs.image_path);
-                if (dlMain) blob = dlMain;
-                if (rs.thumb_path) {
-                  const { data: dlThumb } = await state.cloud.client.storage.from(CLOUD_BUCKET).download(rs.thumb_path);
-                  if (dlThumb) thumbnailBlob = dlThumb;
-                }
-              }
-              if (blob) {
-                const merged = {
-                  id: rs.id,
-                  title: normalizeNFC(rs.title),
-                  key: normalizeNFC(rs.chord_key || ''),
-                  memo: normalizeNFC(rs.memo || ''),
-                  blob,
-                  thumbnailBlob: thumbnailBlob || blob,
-                  width: rs.width || 0,
-                  height: rs.height || 0,
-                  fileSize: rs.file_size || blob.size || 0,
-                  createdAt: rs.created_at || Date.now(),
-                  updatedAt: rs.updated_at || Date.now(),
-                  cloudSynced: true,
-                  cloudOwnerId: uid
-                };
-                await idbPut('sheets', merged);
-                revokeSheetUrls(merged.id);
-                const idx = state.dbSheets.findIndex((x) => x.id === merged.id);
-                if (idx >= 0) state.dbSheets[idx] = merged;
-                else state.dbSheets.unshift(merged);
-                changed = true;
-              }
-            }
-          }
 
-          const { data: remoteContis, error: cErr } = await state.cloud.client
-            .from('contis')
-            .select('*')
-            .order('updated_at', { ascending: false });
-          if (cErr) throw cErr;
-
-          for (const rc of remoteContis || []) {
+          // 3) 콘티 목록 즉시 반영
+          for (const rc of remoteContis) {
             const local = state.dbContis.find((x) => x.id === rc.id);
             if (!local || (rc.updated_at || 0) > (local.updatedAt || 0)) {
               const merged = {
@@ -4037,6 +4080,51 @@ create policy "sheet_images_owner_delete" on storage.objects
               changed = true;
             }
           }
+
+          // 4) 악보 목록 반영: 가벼운 썸네일만 병렬(동시 6개) 다운로드, 고화질 원본은 필요 시 지연 로딩
+          const sheetsToFetch = remoteSheets.filter((rs) => {
+            const local = getSheetById(rs.id);
+            return !local || (rs.updated_at || 0) > (local.updatedAt || 0);
+          });
+
+          await runWithConcurrency(sheetsToFetch, 6, async (rs) => {
+            const local = getSheetById(rs.id);
+            const isUpdated = Boolean(local && (rs.updated_at || 0) > (local.updatedAt || 0));
+            let thumbnailBlob = isUpdated ? null : (local?.thumbnailBlob || null);
+
+            if (!thumbnailBlob) {
+              const dlPath = rs.thumb_path || rs.image_path;
+              if (dlPath) {
+                const { data: dlThumb } = await state.cloud.client.storage.from(CLOUD_BUCKET).download(dlPath);
+                if (dlThumb) thumbnailBlob = dlThumb;
+              }
+            }
+
+            const merged = {
+              id: rs.id,
+              title: normalizeNFC(rs.title),
+              key: normalizeNFC(rs.chord_key || ''),
+              memo: normalizeNFC(rs.memo || ''),
+              blob: isUpdated ? null : (local?.blob || null),
+              thumbnailBlob,
+              cloudImagePath: rs.image_path || `${uid}/${rs.id}.jpg`,
+              cloudThumbPath: rs.thumb_path || `${uid}/${rs.id}_thumb.jpg`,
+              width: rs.width || 0,
+              height: rs.height || 0,
+              fileSize: rs.file_size || local?.fileSize || 0,
+              createdAt: rs.created_at || Date.now(),
+              updatedAt: rs.updated_at || Date.now(),
+              cloudSynced: true,
+              cloudOwnerId: uid
+            };
+
+            await idbPut('sheets', merged);
+            revokeSheetUrls(merged.id);
+            const idx = state.dbSheets.findIndex((x) => x.id === merged.id);
+            if (idx >= 0) state.dbSheets[idx] = merged;
+            else state.dbSheets.unshift(merged);
+            changed = true;
+          });
 
           if (changed) {
             state.dbSheets.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
