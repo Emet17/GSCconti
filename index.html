@@ -175,6 +175,89 @@
 </head>
 <body class="bg-slate-100 text-slate-800 h-screen w-screen overflow-hidden select-none">
 
+  <!-- ========================================================= -->
+  <!-- 초기 로그인 / 회원가입 시작 화면 (Auth Gate) -->
+  <!-- ========================================================= -->
+  <div id="auth-gate" class="no-print fixed inset-0 z-40 bg-gradient-to-br from-slate-100 via-indigo-50/60 to-slate-200 flex items-center justify-center p-4 overflow-y-auto">
+    <div class="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200/80 overflow-hidden my-auto">
+      <!-- 상단 브랜드 헤더 -->
+      <div class="px-7 pt-8 pb-6 text-center bg-gradient-to-b from-brand-50/70 to-white border-b border-slate-100">
+        <div class="w-14 h-14 mx-auto mb-3.5 rounded-2xl bg-brand-600 text-white flex items-center justify-center shadow-md shadow-brand-600/20">
+          <svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+          </svg>
+        </div>
+        <h1 class="text-xl font-bold text-slate-900 tracking-tight">찬양 콘티 & 악보 자동 편집기</h1>
+        <p class="text-xs text-slate-500 mt-1.5">내 계정으로 로그인하여 모든 기기에서 악보 DB와 콘티를 연동하세요.</p>
+      </div>
+
+      <!-- 로그인 / 회원가입 입력 폼 -->
+      <form id="gate-auth-form" class="p-7 space-y-4 select-text" novalidate>
+        <!-- Supabase 미연결 시 안내 배너 -->
+        <div id="gate-not-configured-banner" class="hidden rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 space-y-1.5">
+          <div class="font-bold">Supabase 클라우드 연결이 필요합니다</div>
+          <p class="text-[11px] leading-relaxed">아래 <strong>[Supabase 연동 설정]</strong>을 눌러 Project URL과 키를 입력하거나, <code>index.html</code> 상단에 키를 입력해 주세요.</p>
+        </div>
+
+        <div class="space-y-3">
+          <div>
+            <label for="gate-email-input" class="block text-xs font-semibold text-slate-700 mb-1.5">이메일</label>
+            <input
+              id="gate-email-input"
+              type="email"
+              autocomplete="email"
+              placeholder="name@example.com"
+              class="w-full text-sm bg-slate-50 focus:bg-white border border-slate-200 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 rounded-xl px-3.5 py-2.5 outline-none transition"
+            />
+          </div>
+
+          <div>
+            <label for="gate-password-input" class="block text-xs font-semibold text-slate-700 mb-1.5">비밀번호</label>
+            <input
+              id="gate-password-input"
+              type="password"
+              autocomplete="current-password"
+              placeholder="비밀번호 입력 (6자 이상)"
+              class="w-full text-sm bg-slate-50 focus:bg-white border border-slate-200 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 rounded-xl px-3.5 py-2.5 outline-none transition"
+            />
+          </div>
+        </div>
+
+        <!-- 상태/오류 메시지 영역 -->
+        <div id="gate-feedback" class="hidden rounded-xl px-3.5 py-2.5 text-xs leading-relaxed"></div>
+
+        <!-- 로그인 / 회원가입 버튼 -->
+        <div class="pt-1 space-y-2.5">
+          <button
+            id="gate-btn-signin"
+            type="submit"
+            class="w-full py-2.5 px-4 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold shadow-sm hover:shadow transition active:scale-[0.99] cursor-pointer"
+          >
+            로그인
+          </button>
+
+          <button
+            id="gate-btn-signup"
+            type="button"
+            class="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-50 text-brand-700 border border-brand-200 hover:border-brand-300 text-sm font-semibold transition active:scale-[0.99] cursor-pointer"
+          >
+            회원가입
+          </button>
+        </div>
+
+        <!-- 하단 보조 링크 (Supabase 설정 / 로컬 단독 사용) -->
+        <div class="pt-4 mt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px]">
+          <button id="gate-btn-config" type="button" class="text-slate-500 hover:text-brand-600 font-medium underline underline-offset-2 transition cursor-pointer">
+            Supabase 연동 설정
+          </button>
+          <button id="gate-btn-guest" type="button" class="text-slate-400 hover:text-slate-600 font-medium transition cursor-pointer">
+            로그인 없이 로컬로만 사용 →
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- 전체 앱 컨테이너 -->
   <div id="app-root" class="flex flex-col h-full w-full">
 
@@ -709,7 +792,7 @@
   <!-- ========================================================= -->
   <!-- 토스트 알림 컨테이너 -->
   <!-- ========================================================= -->
-  <div id="toast-container" class="no-print fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-sm"></div>
+  <div id="toast-container" class="no-print fixed bottom-4 right-4 z-[60] flex flex-col gap-2 pointer-events-none max-w-sm"></div>
 
   <!-- 백업 JSON 파일 선택용 숨김 입력 -->
   <input id="backup-file-input" type="file" accept=".json,application/json" class="hidden" />
@@ -1251,7 +1334,8 @@ create policy "praise_sheets_delete_own" on storage.objects
           configured: false,
           user: null,
           syncing: false,
-          lastSyncedAt: null
+          lastSyncedAt: null,
+          guestMode: false
         }
       };
 
@@ -1272,6 +1356,18 @@ create policy "praise_sheets_delete_own" on storage.objects
       ======================================================= */
       const els = {
         dynamicPageStyle: document.getElementById('dynamic-page-style'),
+
+        // 초기 로그인/회원가입 시작 화면 (Auth Gate)
+        authGate: document.getElementById('auth-gate'),
+        gateAuthForm: document.getElementById('gate-auth-form'),
+        gateNotConfiguredBanner: document.getElementById('gate-not-configured-banner'),
+        gateEmailInput: document.getElementById('gate-email-input'),
+        gatePasswordInput: document.getElementById('gate-password-input'),
+        gateFeedback: document.getElementById('gate-feedback'),
+        gateBtnSignin: document.getElementById('gate-btn-signin'),
+        gateBtnSignup: document.getElementById('gate-btn-signup'),
+        gateBtnConfig: document.getElementById('gate-btn-config'),
+        gateBtnGuest: document.getElementById('gate-btn-guest'),
 
         // 상단 툴바 & 반응형 패널
         headerTitle: document.getElementById('header-conti-title'),
@@ -3817,6 +3913,114 @@ create policy "praise_sheets_delete_own" on storage.objects
         els.btnCloudAccount.title = `로그인됨: ${user.email || ''} (클릭하여 동기화·계정 관리)`;
       }
 
+      /**
+       * 로그인 여부에 따라 초기 시작 화면(Auth Gate)을 표시하거나 숨깁니다.
+       */
+      function updateAuthGateVisibility() {
+        const shouldHide = Boolean(state.cloud.user) || Boolean(state.cloud.guestMode);
+        els.authGate.classList.toggle('hidden', shouldHide);
+        els.gateNotConfiguredBanner.classList.toggle('hidden', state.cloud.configured);
+
+        if (!shouldHide) {
+          els.gateFeedback.className = 'hidden';
+          els.gateFeedback.textContent = '';
+          requestAnimationFrame(() => {
+            if (els.gateEmailInput && !els.gateEmailInput.value) {
+              els.gateEmailInput.focus();
+            }
+          });
+        } else {
+          // 메인 화면 진입 시 미리보기 줌 재계산
+          requestAnimationFrame(() => applyZoomToRenderedPages());
+        }
+      }
+
+      function setGateFeedback(message, type = 'error') {
+        const styleMap = {
+          error: 'rounded-xl px-3.5 py-2.5 text-xs leading-relaxed bg-rose-50 text-rose-700 border border-rose-200',
+          warning: 'rounded-xl px-3.5 py-2.5 text-xs leading-relaxed bg-amber-50 text-amber-800 border border-amber-200',
+          success: 'rounded-xl px-3.5 py-2.5 text-xs leading-relaxed bg-emerald-50 text-emerald-800 border border-emerald-200'
+        };
+        els.gateFeedback.className = styleMap[type] || styleMap.error;
+        els.gateFeedback.textContent = message;
+      }
+
+      /**
+       * 시작 화면(Auth Gate)에서 로그인 또는 회원가입을 처리합니다.
+       */
+      async function handleGateAuth(mode) {
+        if (!state.cloud.configured || !supabaseClient) {
+          setGateFeedback('먼저 아래 [Supabase 연동 설정]에서 Project URL과 키를 연결해 주세요.', 'warning');
+          openCloudModal(true);
+          return;
+        }
+
+        const email = els.gateEmailInput.value.trim();
+        const password = els.gatePasswordInput.value;
+
+        if (!email || !password || password.length < 6) {
+          setGateFeedback('이메일과 6자 이상의 비밀번호를 입력해 주세요.', 'warning');
+          return;
+        }
+
+        const setLoading = (loading) => {
+          els.gateBtnSignin.disabled = loading;
+          els.gateBtnSignup.disabled = loading;
+          els.gateBtnSignin.classList.toggle('opacity-60', loading);
+          els.gateBtnSignup.classList.toggle('opacity-60', loading);
+          els.gateBtnSignin.textContent = loading && mode === 'signin' ? '로그인 중...' : '로그인';
+          els.gateBtnSignup.textContent = loading && mode === 'signup' ? '가입 처리 중...' : '회원가입';
+        };
+
+        setLoading(true);
+        els.gateFeedback.className = 'hidden';
+
+        try {
+          if (mode === 'signin') {
+            const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+            state.cloud.user = data.user;
+            state.cloud.guestMode = false;
+            els.gatePasswordInput.value = '';
+            renderCloudAccountButton();
+            updateAuthGateVisibility();
+            showToast(`${email} 계정으로 로그인했습니다.`, 'success');
+            syncWithCloud({ silent: false });
+          } else {
+            const { data, error } = await supabaseClient.auth.signUp({ email, password });
+            if (error) throw error;
+            if (data.session && data.user) {
+              state.cloud.user = data.user;
+              state.cloud.guestMode = false;
+              els.gatePasswordInput.value = '';
+              renderCloudAccountButton();
+              updateAuthGateVisibility();
+              showToast('회원가입 및 자동 로그인이 완료되었습니다!', 'success');
+              syncWithCloud({ silent: false });
+            } else {
+              setGateFeedback(
+                '가입 확인 메일을 발송했습니다! 이메일함에서 인증 링크를 누른 뒤 로그인해 주세요. (Supabase Authentication → Email 설정에서 Confirm email을 끄면 즉시 로그인됩니다.)',
+                'success'
+              );
+            }
+          }
+        } catch (err) {
+          console.error('시작 화면 인증 오류:', err);
+          const rawMsg = String(err?.message || '');
+          if (rawMsg.includes('Invalid login credentials')) {
+            setGateFeedback('이메일 또는 비밀번호가 올바르지 않습니다.', 'error');
+          } else if (rawMsg.includes('Email not confirmed')) {
+            setGateFeedback('이메일 인증이 완료되지 않았습니다. 메일함의 인증 링크를 확인해 주세요.', 'warning');
+          } else if (rawMsg.includes('User already registered')) {
+            setGateFeedback('이미 가입된 이메일입니다. [로그인] 버튼을 눌러 로그인해 주세요.', 'warning');
+          } else {
+            setGateFeedback(rawMsg || '인증 처리 중 오류가 발생했습니다.', 'error');
+          }
+        } finally {
+          setLoading(false);
+        }
+      }
+
       async function initSupabaseClient() {
         if (supabaseAuthUnsubscribe) {
           try {
@@ -3831,6 +4035,7 @@ create policy "praise_sheets_delete_own" on storage.objects
         const cfg = getSupabaseConfig();
         if (!cfg.url || !cfg.anonKey || !window.supabase || typeof window.supabase.createClient !== 'function') {
           renderCloudAccountButton();
+          updateAuthGateVisibility();
           return false;
         }
 
@@ -3846,13 +4051,21 @@ create policy "praise_sheets_delete_own" on storage.objects
 
           const { data } = await supabaseClient.auth.getSession();
           state.cloud.user = data?.session?.user || null;
+          if (state.cloud.user) {
+            state.cloud.guestMode = false;
+          }
           renderCloudAccountButton();
+          updateAuthGateVisibility();
 
           const { data: listener } = supabaseClient.auth.onAuthStateChange((event, session) => {
             const prevUserId = state.cloud.user?.id || null;
             const nextUser = session?.user || null;
             state.cloud.user = nextUser;
+            if (nextUser) {
+              state.cloud.guestMode = false;
+            }
             renderCloudAccountButton();
+            updateAuthGateVisibility();
 
             if (nextUser && nextUser.id !== prevUserId && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
               syncWithCloud({ silent: true });
@@ -3871,6 +4084,7 @@ create policy "praise_sheets_delete_own" on storage.objects
           state.cloud.configured = false;
           state.cloud.user = null;
           renderCloudAccountButton();
+          updateAuthGateVisibility();
           return false;
         }
       }
@@ -4284,8 +4498,8 @@ create policy "praise_sheets_delete_own" on storage.objects
                   saveSupabaseConfig(urlVal, keyVal);
                   const ok = await initSupabaseClient();
                   if (ok) {
+                    closeModal();
                     showToast('Supabase 프로젝트에 연결되었습니다! 이제 로그인하세요.', 'success');
-                    openCloudModal(false);
                   } else {
                     showToast('Supabase 연결에 실패했습니다. URL과 키를 다시 확인해 주세요.', 'error');
                   }
@@ -4365,7 +4579,9 @@ create policy "praise_sheets_delete_own" on storage.objects
                       const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
                       if (error) throw error;
                       state.cloud.user = data.user;
+                      state.cloud.guestMode = false;
                       renderCloudAccountButton();
+                      updateAuthGateVisibility();
                       closeModal();
                       showToast(`${email} 계정으로 로그인했습니다.`, 'success');
                       syncWithCloud({ silent: false });
@@ -4374,7 +4590,9 @@ create policy "praise_sheets_delete_own" on storage.objects
                       if (error) throw error;
                       if (data.session && data.user) {
                         state.cloud.user = data.user;
+                        state.cloud.guestMode = false;
                         renderCloudAccountButton();
+                        updateAuthGateVisibility();
                         closeModal();
                         showToast('회원가입 및 자동 로그인이 완료되었습니다!', 'success');
                         syncWithCloud({ silent: false });
@@ -4480,6 +4698,7 @@ create policy "praise_sheets_delete_own" on storage.objects
                   await supabaseClient.auth.signOut();
                   state.cloud.user = null;
                   state.cloud.lastSyncedAt = null;
+                  state.cloud.guestMode = false;
                   if (clearLocal) {
                     await dbClear(STORE_SHEETS);
                     await dbClear(STORE_CONTIS);
@@ -4496,6 +4715,7 @@ create policy "praise_sheets_delete_own" on storage.objects
                     renderPreview();
                   }
                   renderCloudAccountButton();
+                  updateAuthGateVisibility();
                   closeModal();
                   showToast('로그아웃했습니다.', 'info');
                 } catch (err) {
@@ -4524,6 +4744,19 @@ create policy "praise_sheets_delete_own" on storage.objects
          19. 이벤트 리스너 연결
       ======================================================= */
       function bindEvents() {
+        // 초기 로그인 / 회원가입 시작 화면 이벤트
+        els.gateAuthForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          handleGateAuth('signin');
+        });
+        els.gateBtnSignup.addEventListener('click', () => handleGateAuth('signup'));
+        els.gateBtnConfig.addEventListener('click', () => openCloudModal(true));
+        els.gateBtnGuest.addEventListener('click', () => {
+          state.cloud.guestMode = true;
+          updateAuthGateVisibility();
+          showToast('로컬 모드로 시작했습니다. 상단 버튼에서 언제든 로그인할 수 있습니다.', 'info');
+        });
+
         // 탭 전환
         els.tabBtns.forEach((btn) => {
           btn.addEventListener('click', () => switchTab(btn.dataset.tab));
