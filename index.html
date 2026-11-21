@@ -350,15 +350,20 @@
             </div>
 
             <!-- DB 요약 정보 & 업로드 버튼 -->
-            <div class="flex items-center justify-between bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2">
-              <div class="text-[11px] text-slate-600">
+            <div class="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2">
+              <div class="text-[11px] text-slate-600 truncate">
                 저장된 악보 <strong id="db-total-count" class="text-slate-900">0</strong>개
                 <span class="mx-1 text-slate-300">|</span>
                 용량 <strong id="db-total-size" class="text-slate-900">0 KB</strong>
               </div>
-              <button id="btn-db-direct-upload" type="button" class="text-[11px] font-semibold text-brand-600 hover:text-brand-700 bg-white border border-slate-200 hover:border-brand-300 px-2.5 py-1 rounded-lg shadow-2xs transition">
-                + 악보 업로드
-              </button>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button id="btn-db-clear-all" type="button" class="hidden text-[11px] font-medium text-rose-600 hover:text-rose-700 bg-white border border-rose-200 hover:bg-rose-50 px-2 py-1 rounded-lg transition cursor-pointer" title="저장된 모든 악보 삭제">
+                  DB 초기화
+                </button>
+                <button id="btn-db-direct-upload" type="button" class="text-[11px] font-semibold text-brand-600 hover:text-brand-700 bg-white border border-slate-200 hover:border-brand-300 px-2.5 py-1 rounded-lg shadow-2xs transition cursor-pointer">
+                  + 악보 업로드
+                </button>
+              </div>
             </div>
 
             <!-- DB 악보 목록 -->
@@ -832,6 +837,20 @@
         });
       }
 
+      async function dbClear(storeName) {
+        const db = await openDatabase();
+        if (!db) {
+          memoryStore[storeName].clear();
+          return;
+        }
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(storeName, 'readwrite');
+          tx.objectStore(storeName).clear();
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+      }
+
       async function dbGetAll(storeName) {
         const db = await openDatabase();
         if (!db) {
@@ -1129,6 +1148,7 @@
         dbSearchClear: document.getElementById('db-search-clear'),
         dbTotalCount: document.getElementById('db-total-count'),
         dbTotalSize: document.getElementById('db-total-size'),
+        btnDbClearAll: document.getElementById('btn-db-clear-all'),
         btnDbDirectUpload: document.getElementById('btn-db-direct-upload'),
         dbList: document.getElementById('db-list'),
 
@@ -1867,11 +1887,43 @@
         }
       }
 
+      async function clearAllDbSheets() {
+        const count = state.dbSheets.length;
+        if (count === 0) {
+          showToast('초기화할 악보가 없습니다.', 'info');
+          return;
+        }
+
+        const ok = await confirmDialog({
+          title: '악보 DB 전체 초기화',
+          message: `데이터베이스에 저장된 악보 ${count}개를 모두 영구 삭제하시겠습니까?\n이 작업은 되돌릴 수 없으며, 현재 콘티 및 저장된 콘티의 악보 이미지도 표시되지 않게 됩니다.`,
+          confirmLabel: '전체 초기화',
+          confirmVariant: 'danger'
+        });
+        if (!ok) return;
+
+        try {
+          await dbClear(STORE_SHEETS);
+          state.dbSheets.forEach((s) => revokeSheetUrls(s.id));
+          state.dbSheets = [];
+          els.dbSearchInput.value = '';
+          state.dbSearchQuery = '';
+          renderDbList();
+          renderContiList();
+          renderPreview();
+          showToast(`악보 DB(${count}개)를 모두 초기화했습니다.`, 'info');
+        } catch (err) {
+          console.error('악보 DB 초기화 오류:', err);
+          showToast('악보 DB 초기화 중 오류가 발생했습니다.', 'error');
+        }
+      }
+
       function renderDbList() {
         const totalBytes = state.dbSheets.reduce((sum, s) => sum + (s.fileSize || 0), 0);
         els.tabDbCount.textContent = String(state.dbSheets.length);
         els.dbTotalCount.textContent = String(state.dbSheets.length);
         els.dbTotalSize.textContent = formatBytes(totalBytes);
+        els.btnDbClearAll.classList.toggle('hidden', state.dbSheets.length === 0);
         els.dbSearchClear.classList.toggle('hidden', !state.dbSearchQuery);
 
         const qNorm = normalizeForSearch(state.dbSearchQuery);
@@ -2896,6 +2948,7 @@
           uploadModeAddToConti = false;
           els.sheetFileInput.click();
         });
+        els.btnDbClearAll.addEventListener('click', clearAllDbSheets);
         els.sheetFileInput.addEventListener('change', (e) => {
           if (e.target.files && e.target.files.length > 0) {
             handleUploadedFiles(e.target.files, { addToConti: uploadModeAddToConti });
