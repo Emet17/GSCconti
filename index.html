@@ -13,6 +13,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- A4 PDF 직접 생성을 위한 jsPDF CDN (미리보기 샌드박스 환경에서도 PDF 저장 지원) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <!-- Supabase 클라우드 계정 로그인 및 기기간 동기화 SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -210,6 +212,11 @@
 
       <!-- 오른쪽: 주요 액션 버튼 -->
       <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <button id="btn-cloud-account" type="button" class="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 active:scale-[0.99] transition cursor-pointer" title="클라우드 계정 로그인 및 기기간 동기화">
+          <span id="cloud-status-dot" class="w-2 h-2 rounded-full bg-slate-300 shrink-0"></span>
+          <span id="cloud-btn-label" class="hidden md:inline max-w-[130px] truncate">클라우드 연동</span>
+        </button>
+
         <button id="btn-new-conti" type="button" class="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 active:scale-[0.99] transition">
           <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
@@ -1004,6 +1011,89 @@
       /* =======================================================
          4. 애플리케이션 상태 (State) 및 기본 설정
       ======================================================= */
+      // ★ GitHub Pages 등 모든 기기에서 자동 연결하려면 아래 두 값에 본인 Supabase 프로젝트 URL과 anon(publishable) key를 입력하세요.
+      // (비워 두어도 웹앱 상단 [클라우드 연동] 버튼에서 직접 입력해 연결할 수 있습니다.)
+      const DEFAULT_SUPABASE_URL = '';
+      const DEFAULT_SUPABASE_ANON_KEY = '';
+
+      const SUPABASE_CONFIG_KEY = 'praiseConti_supabaseConfig_v1';
+      const SUPABASE_BUCKET = 'praise-sheets';
+
+      // 본인 계정 전용 접근 권한(RLS) + 비공개 악보 버킷 생성 SQL (SQL Editor에 한 번만 실행)
+      const SUPABASE_SETUP_SQL = `-- 1. 악보 DB 테이블 (본인 계정 전용)
+create table if not exists public.sheets (
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  id text not null,
+  title text not null,
+  chord_key text default '',
+  memo text default '',
+  image_path text not null,
+  thumb_path text not null,
+  width integer default 0,
+  height integer default 0,
+  file_size integer default 0,
+  created_at bigint not null,
+  updated_at bigint not null,
+  primary key (user_id, id)
+);
+
+-- 2. 콘티 테이블 (악보 ID 참조 방식)
+create table if not exists public.contis (
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  id text not null,
+  title text not null,
+  worship_date text default '',
+  items jsonb not null default '[]'::jsonb,
+  layout jsonb not null default '{}'::jsonb,
+  created_at bigint not null,
+  updated_at bigint not null,
+  primary key (user_id, id)
+);
+
+-- 3. 행 수준 보안(RLS) 활성화: 로그인한 본인 데이터만 읽기/쓰기 가능
+alter table public.sheets enable row level security;
+alter table public.contis enable row level security;
+
+drop policy if exists "sheets_owner_all" on public.sheets;
+create policy "sheets_owner_all" on public.sheets
+  for all using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "contis_owner_all" on public.contis;
+create policy "contis_owner_all" on public.contis
+  for all using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- 4. 비공개 악보 이미지 저장소(Private Storage Bucket) 생성
+insert into storage.buckets (id, name, public)
+values ('praise-sheets', 'praise-sheets', false)
+on conflict (id) do nothing;
+
+-- 5. 저장소 보안 정책: 본인 UID 폴더(auth.uid()/*)만 접근 허용
+drop policy if exists "praise_sheets_select_own" on storage.objects;
+create policy "praise_sheets_select_own" on storage.objects
+  for select using (
+    bucket_id = 'praise-sheets' and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "praise_sheets_insert_own" on storage.objects;
+create policy "praise_sheets_insert_own" on storage.objects
+  for insert with check (
+    bucket_id = 'praise-sheets' and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "praise_sheets_update_own" on storage.objects;
+create policy "praise_sheets_update_own" on storage.objects
+  for update using (
+    bucket_id = 'praise-sheets' and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "praise_sheets_delete_own" on storage.objects;
+create policy "praise_sheets_delete_own" on storage.objects
+  for delete using (
+    bucket_id = 'praise-sheets' and (storage.foldername(name))[1] = auth.uid()::text
+  );`;
+
       const LAYOUT_STORAGE_KEY = 'praiseConti_lastLayout_v1';
       const PDF_FILENAME_PATTERN_KEY = 'praiseConti_pdfFilenamePattern_v1';
       const DEFAULT_PDF_FILENAME_PATTERN = '{날짜}_{제목}';
@@ -1156,8 +1246,17 @@
         contiSearchQuery: '',
         selectedDbSheetIds: new Set(),
         zoomMode: 'fit',
-        zoomScale: 0.75
+        zoomScale: 0.75,
+        cloud: {
+          configured: false,
+          user: null,
+          syncing: false,
+          lastSyncedAt: null
+        }
       };
+
+      let supabaseClient = null;
+      let supabaseAuthUnsubscribe = null;
 
       // ObjectURL 캐시 (메모리 누수 방지 및 빠른 렌더링)
       const sheetImageUrlMap = new Map();
@@ -1179,6 +1278,9 @@
         saveStatusBadge: document.getElementById('save-status-badge'),
         mobileViewEdit: document.getElementById('mobile-view-edit'),
         mobileViewPreview: document.getElementById('mobile-view-preview'),
+        btnCloudAccount: document.getElementById('btn-cloud-account'),
+        cloudStatusDot: document.getElementById('cloud-status-dot'),
+        cloudBtnLabel: document.getElementById('cloud-btn-label'),
         btnNewConti: document.getElementById('btn-new-conti'),
         btnSaveConti: document.getElementById('btn-save-conti'),
         btnPrintPdf: document.getElementById('btn-print-pdf'),
@@ -1593,15 +1695,25 @@
               existing.height = optimized.height;
               existing.fileSize = optimized.fileSize;
               existing.updatedAt = Date.now();
+              existing.cloudSynced = false;
 
               setSheetUrls(task.sheetId, optimized.blob, optimized.thumbnailBlob);
               await dbPut(STORE_SHEETS, existing);
+              if (state.cloud.user) {
+                await cloudUpsertSheet(existing);
+              }
             } catch (err) {
               console.warn('백그라운드 악보 압축/저장 오류:', err);
               // 압축 실패 시 원본 Blob으로라도 안전 저장 시도
               try {
                 const existing = state.dbSheets.find((s) => s.id === task.sheetId);
-                if (existing) await dbPut(STORE_SHEETS, existing);
+                if (existing) {
+                  existing.cloudSynced = false;
+                  await dbPut(STORE_SHEETS, existing);
+                  if (state.cloud.user) {
+                    await cloudUpsertSheet(existing);
+                  }
+                }
               } catch (dbErr) {
                 console.error('원본 DB 저장 실패:', dbErr);
               }
@@ -1979,6 +2091,9 @@
 
         try {
           await Promise.all(targetIds.map((id) => dbDelete(STORE_SHEETS, id)));
+          if (state.cloud.user) {
+            await cloudDeleteSheets(targetIds);
+          }
           const deletedSet = new Set(targetIds);
           state.dbSheets = state.dbSheets.filter((s) => !deletedSet.has(s.id));
           targetIds.forEach((id) => {
@@ -2029,9 +2144,13 @@
                 sheet.key = newKey;
                 sheet.memo = newMemo;
                 sheet.updatedAt = Date.now();
+                sheet.cloudSynced = false;
 
                 try {
                   await dbPut(STORE_SHEETS, sheet);
+                  if (state.cloud.user) {
+                    await cloudUpsertSheet(sheet, { uploadImages: false });
+                  }
                   renderDbList();
                   closeModal();
                   showToast('악보 정보를 수정했습니다.', 'success');
@@ -2060,6 +2179,9 @@
 
         try {
           await dbDelete(STORE_SHEETS, sheet.id);
+          if (state.cloud.user) {
+            await cloudDeleteSheets([sheet.id]);
+          }
           state.dbSheets = state.dbSheets.filter((s) => s.id !== sheet.id);
           state.selectedDbSheetIds.delete(sheet.id);
           revokeSheetUrls(sheet.id);
@@ -2089,7 +2211,11 @@
         if (!ok) return;
 
         try {
+          const allSheetIds = state.dbSheets.map((s) => s.id);
           await dbClear(STORE_SHEETS);
+          if (state.cloud.user && allSheetIds.length > 0) {
+            await cloudDeleteSheets(allSheetIds);
+          }
           state.dbSheets.forEach((s) => revokeSheetUrls(s.id));
           state.dbSheets = [];
           state.selectedDbSheetIds.clear();
@@ -2224,11 +2350,16 @@
           })),
           layout: { ...createDefaultLayout(), ...state.conti.layout },
           createdAt: existing ? existing.createdAt : now,
-          updatedAt: now
+          updatedAt: now,
+          cloudSynced: false,
+          cloudOwnerId: state.cloud.user ? state.cloud.user.id : (existing?.cloudOwnerId || null)
         };
 
         try {
           await dbPut(STORE_CONTIS, record);
+          if (state.cloud.user) {
+            cloudUpsertConti(record).catch((err) => console.warn('클라우드 콘티 동기화 실패:', err));
+          }
           state.conti.id = contiId;
           state.conti.title = title;
           state.isDirty = false;
@@ -2357,10 +2488,15 @@
           items: (saved.items || []).map((i) => ({ ...i })),
           layout: { ...createDefaultLayout(), ...(saved.layout || {}) },
           createdAt: now,
-          updatedAt: now
+          updatedAt: now,
+          cloudSynced: false,
+          cloudOwnerId: state.cloud.user ? state.cloud.user.id : null
         };
         try {
           await dbPut(STORE_CONTIS, copy);
+          if (state.cloud.user) {
+            cloudUpsertConti(copy).catch((err) => console.warn('클라우드 콘티 복제 동기화 실패:', err));
+          }
           state.dbContis.unshift(copy);
           renderSavedContiList();
           showToast(`'${copy.title}'으로 복제했습니다.`, 'success');
@@ -2381,6 +2517,9 @@
 
         try {
           await dbDelete(STORE_CONTIS, saved.id);
+          if (state.cloud.user) {
+            cloudDeleteConti(saved.id).catch((err) => console.warn('클라우드 콘티 삭제 동기화 실패:', err));
+          }
           state.dbContis = state.dbContis.filter((c) => c.id !== saved.id);
           if (state.conti.id === saved.id) {
             state.conti.id = null;
@@ -3434,8 +3573,16 @@
 
                 try {
                   if (mode === 'replace') {
+                    const prevSheetIds = state.dbSheets.map((s) => s.id);
+                    const prevContiIds = state.dbContis.map((c) => c.id);
                     await dbClear(STORE_SHEETS);
                     await dbClear(STORE_CONTIS);
+                    if (state.cloud.user) {
+                      if (prevSheetIds.length > 0) await cloudDeleteSheets(prevSheetIds);
+                      for (const cid of prevContiIds) {
+                        await cloudDeleteConti(cid);
+                      }
+                    }
                     state.dbSheets.forEach((s) => revokeSheetUrls(s.id));
                     state.selectedDbSheetIds.clear();
                   }
@@ -3461,7 +3608,8 @@
                       height: Number(raw.height) || 0,
                       fileSize: blob.size || Number(raw.fileSize) || 0,
                       createdAt: Number(raw.createdAt) || Date.now(),
-                      updatedAt: Number(raw.updatedAt) || Date.now()
+                      updatedAt: Number(raw.updatedAt) || Date.now(),
+                      cloudSynced: false
                     };
 
                     await dbPut(STORE_SHEETS, sheetRecord);
@@ -3489,7 +3637,8 @@
                         : [],
                       layout: { ...createDefaultLayout(), ...(rawC.layout || {}) },
                       createdAt: Number(rawC.createdAt) || Date.now(),
-                      updatedAt: Number(rawC.updatedAt) || Date.now()
+                      updatedAt: Number(rawC.updatedAt) || Date.now(),
+                      cloudSynced: false
                     };
 
                     await dbPut(STORE_CONTIS, contiRecord);
@@ -3546,6 +3695,10 @@
                     `복원 완료: 악보 ${restoredSheetCount}개 · 콘티 ${restoredContiCount}개를 불러왔습니다.`,
                     'success'
                   );
+
+                  if (state.cloud.user) {
+                    syncWithCloud({ silent: false });
+                  }
                 } catch (err) {
                   console.error('백업 불러오기 오류:', err);
                   progressEl.classList.add('hidden');
@@ -3558,6 +3711,812 @@
               }
             }
           ]
+        });
+      }
+
+      /* =======================================================
+         18-3. Supabase 클라우드 계정 로그인 및 기기간 자동 동기화 엔진
+      ======================================================= */
+      function copyTextSafely(text) {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.top = '-9999px';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          const ok = document.execCommand('copy');
+          ta.remove();
+          return ok;
+        } catch (err) {
+          console.warn('클립보드 복사 실패:', err);
+          return false;
+        }
+      }
+
+      function getSupabaseConfig() {
+        let savedUrl = '';
+        let savedKey = '';
+        try {
+          const raw = localStorage.getItem(SUPABASE_CONFIG_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            savedUrl = String(parsed.url || '').trim();
+            savedKey = String(parsed.anonKey || '').trim();
+          }
+        } catch (err) {
+          console.warn('Supabase 설정 읽기 실패:', err);
+        }
+
+        const url = (DEFAULT_SUPABASE_URL || savedUrl).replace(/\/+$/, '').trim();
+        const anonKey = (DEFAULT_SUPABASE_ANON_KEY || savedKey).trim();
+        return {
+          url,
+          anonKey,
+          fromCode: Boolean(DEFAULT_SUPABASE_URL && DEFAULT_SUPABASE_ANON_KEY)
+        };
+      }
+
+      function saveSupabaseConfig(url, anonKey) {
+        try {
+          localStorage.setItem(
+            SUPABASE_CONFIG_KEY,
+            JSON.stringify({
+              url: String(url || '').replace(/\/+$/, '').trim(),
+              anonKey: String(anonKey || '').trim()
+            })
+          );
+        } catch (err) {
+          console.warn('Supabase 설정 저장 실패:', err);
+        }
+      }
+
+      function clearSupabaseConfig() {
+        try {
+          localStorage.removeItem(SUPABASE_CONFIG_KEY);
+        } catch (err) {
+          console.warn('Supabase 설정 삭제 실패:', err);
+        }
+      }
+
+      function renderCloudAccountButton() {
+        const { configured, user, syncing } = state.cloud;
+
+        if (!configured) {
+          els.cloudStatusDot.className = 'w-2 h-2 rounded-full bg-slate-300 shrink-0';
+          els.cloudBtnLabel.textContent = '클라우드 연동';
+          els.btnCloudAccount.className =
+            'inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 active:scale-[0.99] transition cursor-pointer';
+          els.btnCloudAccount.title = 'Supabase 클라우드 계정 연동 설정';
+          return;
+        }
+
+        if (!user) {
+          els.cloudStatusDot.className = 'w-2 h-2 rounded-full bg-amber-400 shrink-0';
+          els.cloudBtnLabel.textContent = '로그인';
+          els.btnCloudAccount.className =
+            'inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 active:scale-[0.99] transition cursor-pointer';
+          els.btnCloudAccount.title = '클라우드 계정 로그인 (기기간 동기화)';
+          return;
+        }
+
+        const shortName = (user.email || '계정').split('@')[0];
+        if (syncing) {
+          els.cloudStatusDot.className = 'w-2 h-2 rounded-full bg-brand-500 animate-pulse shrink-0';
+          els.cloudBtnLabel.textContent = '동기화 중...';
+          els.btnCloudAccount.className =
+            'inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold text-brand-700 bg-brand-50 border border-brand-200 transition cursor-pointer';
+        } else {
+          els.cloudStatusDot.className = 'w-2 h-2 rounded-full bg-emerald-500 shrink-0';
+          els.cloudBtnLabel.textContent = shortName;
+          els.btnCloudAccount.className =
+            'inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold text-emerald-800 bg-emerald-50/80 border border-emerald-200 hover:bg-emerald-100/70 active:scale-[0.99] transition cursor-pointer';
+        }
+        els.btnCloudAccount.title = `로그인됨: ${user.email || ''} (클릭하여 동기화·계정 관리)`;
+      }
+
+      async function initSupabaseClient() {
+        if (supabaseAuthUnsubscribe) {
+          try {
+            supabaseAuthUnsubscribe();
+          } catch {}
+          supabaseAuthUnsubscribe = null;
+        }
+        supabaseClient = null;
+        state.cloud.configured = false;
+        state.cloud.user = null;
+
+        const cfg = getSupabaseConfig();
+        if (!cfg.url || !cfg.anonKey || !window.supabase || typeof window.supabase.createClient !== 'function') {
+          renderCloudAccountButton();
+          return false;
+        }
+
+        try {
+          supabaseClient = window.supabase.createClient(cfg.url, cfg.anonKey, {
+            auth: {
+              persistSession: true,
+              autoRefreshToken: true,
+              detectSessionInUrl: true
+            }
+          });
+          state.cloud.configured = true;
+
+          const { data } = await supabaseClient.auth.getSession();
+          state.cloud.user = data?.session?.user || null;
+          renderCloudAccountButton();
+
+          const { data: listener } = supabaseClient.auth.onAuthStateChange((event, session) => {
+            const prevUserId = state.cloud.user?.id || null;
+            const nextUser = session?.user || null;
+            state.cloud.user = nextUser;
+            renderCloudAccountButton();
+
+            if (nextUser && nextUser.id !== prevUserId && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
+              syncWithCloud({ silent: true });
+            }
+          });
+          if (listener && listener.subscription) {
+            supabaseAuthUnsubscribe = () => listener.subscription.unsubscribe();
+          }
+
+          if (state.cloud.user) {
+            syncWithCloud({ silent: true });
+          }
+          return true;
+        } catch (err) {
+          console.error('Supabase 초기화 오류:', err);
+          state.cloud.configured = false;
+          state.cloud.user = null;
+          renderCloudAccountButton();
+          return false;
+        }
+      }
+
+      /**
+       * 단일 악보(이미지 + 메타데이터)를 Supabase 비공개 버킷과 sheets 테이블에 업로드합니다.
+       */
+      async function cloudUpsertSheet(sheet, { uploadImages = true } = {}) {
+        if (!supabaseClient || !state.cloud.user || !sheet) return false;
+        const userId = state.cloud.user.id;
+        const imagePath = `${userId}/${sheet.id}.jpg`;
+        const thumbPath = `${userId}/${sheet.id}_thumb.jpg`;
+
+        try {
+          if (uploadImages) {
+            if (sheet.blob) {
+              const { error: mainErr } = await supabaseClient.storage
+                .from(SUPABASE_BUCKET)
+                .upload(imagePath, sheet.blob, {
+                  contentType: sheet.blob.type || 'image/jpeg',
+                  upsert: true
+                });
+              if (mainErr) throw mainErr;
+            }
+            const tBlob = sheet.thumbnailBlob || sheet.blob;
+            if (tBlob) {
+              const { error: thumbErr } = await supabaseClient.storage
+                .from(SUPABASE_BUCKET)
+                .upload(thumbPath, tBlob, {
+                  contentType: tBlob.type || 'image/jpeg',
+                  upsert: true
+                });
+              if (thumbErr) throw thumbErr;
+            }
+          }
+
+          const { error: dbErr } = await supabaseClient.from('sheets').upsert(
+            {
+              user_id: userId,
+              id: sheet.id,
+              title: normalizeNFC(sheet.title),
+              chord_key: normalizeNFC(sheet.key || ''),
+              memo: normalizeNFC(sheet.memo || ''),
+              image_path: imagePath,
+              thumb_path: thumbPath,
+              width: Number(sheet.width) || 0,
+              height: Number(sheet.height) || 0,
+              file_size: Number(sheet.fileSize) || 0,
+              created_at: Number(sheet.createdAt) || Date.now(),
+              updated_at: Number(sheet.updatedAt) || Date.now()
+            },
+            { onConflict: 'user_id,id' }
+          );
+          if (dbErr) throw dbErr;
+
+          sheet.cloudSynced = true;
+          sheet.cloudOwnerId = userId;
+          await dbPut(STORE_SHEETS, sheet);
+          return true;
+        } catch (err) {
+          console.warn('클라우드 악보 업로드 실패:', err);
+          return false;
+        }
+      }
+
+      async function cloudDeleteSheets(sheetIds) {
+        if (!supabaseClient || !state.cloud.user || !sheetIds || sheetIds.length === 0) return;
+        const userId = state.cloud.user.id;
+        const paths = [];
+        sheetIds.forEach((id) => {
+          paths.push(`${userId}/${id}.jpg`);
+          paths.push(`${userId}/${id}_thumb.jpg`);
+        });
+
+        try {
+          await supabaseClient.storage.from(SUPABASE_BUCKET).remove(paths);
+          await supabaseClient.from('sheets').delete().eq('user_id', userId).in('id', sheetIds);
+        } catch (err) {
+          console.warn('클라우드 악보 삭제 실패:', err);
+        }
+      }
+
+      async function cloudUpsertConti(conti) {
+        if (!supabaseClient || !state.cloud.user || !conti) return false;
+        const userId = state.cloud.user.id;
+
+        try {
+          const { error } = await supabaseClient.from('contis').upsert(
+            {
+              user_id: userId,
+              id: conti.id,
+              title: normalizeNFC(conti.title),
+              worship_date: conti.date || getTodayDateString(),
+              items: (conti.items || []).map((item) => ({
+                sheetId: item.sheetId,
+                title: normalizeNFC(item.title || ''),
+                key: normalizeNFC(item.key || ''),
+                memo: normalizeNFC(item.memo || '')
+              })),
+              layout: { ...createDefaultLayout(), ...(conti.layout || {}) },
+              created_at: Number(conti.createdAt) || Date.now(),
+              updated_at: Number(conti.updatedAt) || Date.now()
+            },
+            { onConflict: 'user_id,id' }
+          );
+          if (error) throw error;
+
+          conti.cloudSynced = true;
+          conti.cloudOwnerId = userId;
+          await dbPut(STORE_CONTIS, conti);
+          return true;
+        } catch (err) {
+          console.warn('클라우드 콘티 저장 실패:', err);
+          return false;
+        }
+      }
+
+      async function cloudDeleteConti(contiId) {
+        if (!supabaseClient || !state.cloud.user || !contiId) return;
+        const userId = state.cloud.user.id;
+        try {
+          await supabaseClient.from('contis').delete().eq('user_id', userId).eq('id', contiId);
+        } catch (err) {
+          console.warn('클라우드 콘티 삭제 실패:', err);
+        }
+      }
+
+      /**
+       * Local-First 양방향 클라우드 동기화:
+       * - 오프라인/로그인 전에 추가된 로컬 항목은 클라우드로 자동 업로드
+       * - 다른 기기에서 추가·수정된 항목은 로컬 IndexedDB로 자동 다운로드(캐싱)
+       * - 다른 기기에서 삭제된 기존 동기화 항목은 로컬에서도 깔끔하게 정리
+       */
+      async function syncWithCloud({ silent = false } = {}) {
+        if (!supabaseClient || !state.cloud.user || state.cloud.syncing) return;
+
+        state.cloud.syncing = true;
+        renderCloudAccountButton();
+
+        const userId = state.cloud.user.id;
+        let uploadedCount = 0;
+        let downloadedCount = 0;
+
+        try {
+          // 1) 클라우드 메타데이터 조회
+          const [remoteSheetsRes, remoteContisRes] = await Promise.all([
+            supabaseClient.from('sheets').select('*').eq('user_id', userId),
+            supabaseClient.from('contis').select('*').eq('user_id', userId)
+          ]);
+
+          if (remoteSheetsRes.error) throw remoteSheetsRes.error;
+          if (remoteContisRes.error) throw remoteContisRes.error;
+
+          const remoteSheets = remoteSheetsRes.data || [];
+          const remoteContis = remoteContisRes.data || [];
+
+          const remoteSheetMap = new Map(remoteSheets.map((r) => [r.id, r]));
+          const localSheetMap = new Map(state.dbSheets.map((s) => [s.id, s]));
+
+          // 2) 악보 동기화: 클라우드 -> 로컬 다운로드 및 갱신
+          for (const remote of remoteSheets) {
+            const local = localSheetMap.get(remote.id);
+            const remoteUpdated = Number(remote.updated_at) || 0;
+            const localUpdated = Number(local?.updatedAt) || 0;
+
+            if (!local || !local.blob) {
+              // 다른 기기에서 올라온 신규 악보 다운로드
+              const { data: imgBlob, error: dlErr } = await supabaseClient.storage
+                .from(SUPABASE_BUCKET)
+                .download(remote.image_path);
+              if (dlErr || !imgBlob) {
+                console.warn(`악보 이미지 다운로드 실패 (${remote.id}):`, dlErr);
+                continue;
+              }
+              let thumbBlob = imgBlob;
+              if (remote.thumb_path && remote.thumb_path !== remote.image_path) {
+                const { data: tBlob } = await supabaseClient.storage
+                  .from(SUPABASE_BUCKET)
+                  .download(remote.thumb_path);
+                if (tBlob) thumbBlob = tBlob;
+              }
+
+              const newSheet = {
+                id: remote.id,
+                title: normalizeNFC(remote.title),
+                key: normalizeNFC(remote.chord_key || ''),
+                memo: normalizeNFC(remote.memo || ''),
+                blob: imgBlob,
+                thumbnailBlob: thumbBlob,
+                width: Number(remote.width) || 0,
+                height: Number(remote.height) || 0,
+                fileSize: imgBlob.size || Number(remote.file_size) || 0,
+                createdAt: Number(remote.created_at) || Date.now(),
+                updatedAt: remoteUpdated || Date.now(),
+                cloudSynced: true,
+                cloudOwnerId: userId
+              };
+              await dbPut(STORE_SHEETS, newSheet);
+              setSheetUrls(newSheet.id, newSheet.blob, newSheet.thumbnailBlob);
+              downloadedCount++;
+            } else if (remoteUpdated > localUpdated) {
+              // 클라우드 메타데이터가 더 최신이면 반영
+              local.title = normalizeNFC(remote.title);
+              local.key = normalizeNFC(remote.chord_key || '');
+              local.memo = normalizeNFC(remote.memo || '');
+              local.updatedAt = remoteUpdated;
+              local.cloudSynced = true;
+              local.cloudOwnerId = userId;
+              await dbPut(STORE_SHEETS, local);
+              downloadedCount++;
+            } else if (localUpdated > remoteUpdated || !local.cloudSynced) {
+              // 로컬이 더 최신이거나 미동기화 상태면 클라우드 반영
+              const ok = await cloudUpsertSheet(local, { uploadImages: !local.cloudSynced });
+              if (ok) uploadedCount++;
+            }
+          }
+
+          // 3) 악보 동기화: 로컬 전용(오프라인 생성) -> 클라우드 업로드 / 타 기기 삭제분 로컬 정리
+          for (const local of state.dbSheets) {
+            if (remoteSheetMap.has(local.id)) continue;
+            if (local.cloudSynced && local.cloudOwnerId === userId) {
+              // 이미 이 계정으로 동기화되었던 악보가 클라우드에서 사라짐 -> 다른 기기에서 삭제됨
+              await dbDelete(STORE_SHEETS, local.id);
+              revokeSheetUrls(local.id);
+              state.selectedDbSheetIds.delete(local.id);
+            } else if (!local.cloudOwnerId || local.cloudOwnerId === userId) {
+              const ok = await cloudUpsertSheet(local, { uploadImages: true });
+              if (ok) uploadedCount++;
+            }
+          }
+
+          // 4) 콘티 동기화
+          const remoteContiMap = new Map(remoteContis.map((r) => [r.id, r]));
+          const localContiMap = new Map(state.dbContis.map((c) => [c.id, c]));
+
+          for (const remote of remoteContis) {
+            const local = localContiMap.get(remote.id);
+            const remoteUpdated = Number(remote.updated_at) || 0;
+            const localUpdated = Number(local?.updatedAt) || 0;
+
+            if (!local || remoteUpdated > localUpdated) {
+              const syncedConti = {
+                id: remote.id,
+                title: normalizeNFC(remote.title),
+                date: remote.worship_date || getTodayDateString(),
+                items: Array.isArray(remote.items)
+                  ? remote.items.map((it) => ({
+                      sheetId: it.sheetId,
+                      title: normalizeNFC(it.title || ''),
+                      key: normalizeNFC(it.key || ''),
+                      memo: normalizeNFC(it.memo || '')
+                    }))
+                  : [],
+                layout: { ...createDefaultLayout(), ...(remote.layout || {}) },
+                createdAt: Number(remote.created_at) || Date.now(),
+                updatedAt: remoteUpdated || Date.now(),
+                cloudSynced: true,
+                cloudOwnerId: userId
+              };
+              await dbPut(STORE_CONTIS, syncedConti);
+              downloadedCount++;
+            } else if (localUpdated > remoteUpdated || !local.cloudSynced) {
+              const ok = await cloudUpsertConti(local);
+              if (ok) uploadedCount++;
+            }
+          }
+
+          for (const local of state.dbContis) {
+            if (remoteContiMap.has(local.id)) continue;
+            if (local.cloudSynced && local.cloudOwnerId === userId) {
+              await dbDelete(STORE_CONTIS, local.id);
+            } else if (!local.cloudOwnerId || local.cloudOwnerId === userId) {
+              const ok = await cloudUpsertConti(local);
+              if (ok) uploadedCount++;
+            }
+          }
+
+          // 5) IndexedDB에서 최신 상태로 메모리 재동기화
+          const [freshSheets, freshContis] = await Promise.all([
+            dbGetAll(STORE_SHEETS),
+            dbGetAll(STORE_CONTIS)
+          ]);
+
+          state.dbSheets = freshSheets
+            .map((s) => ({
+              ...s,
+              title: normalizeNFC(s.title),
+              key: normalizeNFC(s.key),
+              memo: normalizeNFC(s.memo)
+            }))
+            .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+          state.dbContis = freshContis
+            .map((c) => ({
+              ...c,
+              title: normalizeNFC(c.title)
+            }))
+            .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+          state.cloud.lastSyncedAt = new Date().toISOString();
+          renderDbList();
+          renderSavedContiList();
+          renderContiList();
+          renderPreview();
+
+          if (!silent) {
+            showToast(
+              `클라우드 동기화 완료 (업로드 ${uploadedCount}건 · 내려받기 ${downloadedCount}건)`,
+              'success'
+            );
+          } else if (uploadedCount > 0 || downloadedCount > 0) {
+            showToast(`클라우드 동기화 완료 (↑${uploadedCount} · ↓${downloadedCount})`, 'success');
+          }
+        } catch (err) {
+          console.error('클라우드 동기화 오류:', err);
+          if (!silent) {
+            const msg = String(err?.message || '');
+            if (msg.includes('relation') || msg.includes('does not exist')) {
+              showToast('Supabase 테이블이 아직 생성되지 않았습니다. 설정 SQL을 먼저 실행해 주세요.', 'error');
+            } else {
+              showToast(`동기화 오류: ${msg || '네트워크 및 설정을 확인해 주세요.'}`, 'error');
+            }
+          }
+        } finally {
+          state.cloud.syncing = false;
+          renderCloudAccountButton();
+        }
+      }
+
+      /**
+       * 클라우드 설정 / 로그인·회원가입 / 계정 동기화 관리 모달
+       */
+      function openCloudModal(forceConfigView = false) {
+        const cfg = getSupabaseConfig();
+
+        // 1) Supabase 프로젝트 URL / Key 미설정 또는 설정 변경 화면
+        if (!state.cloud.configured || forceConfigView) {
+          openModal({
+            title: 'Supabase 클라우드 연동 설정',
+            maxWidth: 'max-w-lg',
+            bodyHtml: `
+              <div class="space-y-4">
+                <p class="text-xs text-slate-600 leading-relaxed">
+                  무료 <strong>Supabase</strong> 프로젝트를 연결하면 이메일 로그인으로 PC·태블릿·스마트폰 어디서든 내 악보 DB와 콘티를 자동 동기화할 수 있습니다.
+                </p>
+
+                <div class="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-2.5">
+                  <div>
+                    <label class="block text-[11px] font-bold text-slate-700 mb-1">1. Project URL</label>
+                    <input id="sb-url-input" type="url" value="${escapeHtml(cfg.url)}" placeholder="https://xxxxxxxx.supabase.co" class="w-full text-xs bg-white border border-slate-200 focus:border-brand-500 rounded-lg px-2.5 py-2 outline-none" />
+                  </div>
+                  <div>
+                    <label class="block text-[11px] font-bold text-slate-700 mb-1">2. Publishable / Anon Public Key</label>
+                    <input id="sb-key-input" type="text" value="${escapeHtml(cfg.anonKey)}" placeholder="eyJhbGciOiJIUzI1NiIs... 또는 sb_publishable_..." class="w-full text-xs bg-white border border-slate-200 focus:border-brand-500 rounded-lg px-2.5 py-2 outline-none font-mono" />
+                    <p class="text-[10px] text-slate-400 mt-1">※ 공개용(anon/publishable) 키만 입력하세요. 비밀(service_role) 키는 절대 입력하지 마세요.</p>
+                  </div>
+                </div>
+
+                <!-- 원클릭 보안 SQL 복사 섹션 -->
+                <div class="rounded-xl border border-brand-200/80 bg-brand-50/40 p-3 space-y-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-xs font-bold text-brand-800">초기 1회 필수: DB 테이블 · 보안 정책(RLS) SQL</span>
+                    <button id="btn-copy-sb-sql" type="button" class="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-brand-600 hover:bg-brand-700 text-white transition cursor-pointer">
+                      SQL 전체 복사
+                    </button>
+                  </div>
+                  <p class="text-[11px] text-slate-600 leading-relaxed">
+                    Supabase 대시보드 → <strong>SQL Editor</strong>에 아래 SQL을 붙여넣고 <strong>Run</strong>을 한 번 실행하면 본인 계정만 접근 가능한 테이블과 비공개 악보 저장소가 자동 생성됩니다.
+                  </p>
+                  <details class="text-[11px]">
+                    <summary class="cursor-pointer font-semibold text-brand-700 hover:underline">SQL 코드 미리보기</summary>
+                    <pre class="mt-2 p-2.5 rounded-lg bg-slate-900 text-slate-100 text-[10px] overflow-auto max-h-40 select-all whitespace-pre-wrap">${escapeHtml(SUPABASE_SETUP_SQL)}</pre>
+                  </details>
+                </div>
+
+                ${
+                  cfg.fromCode
+                    ? `<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-2.5 text-[11px] text-emerald-800">
+                        현재 <strong>index.html 코드 내부</strong>에 기본 Supabase 키가 연결되어 있습니다.
+                      </div>`
+                    : ''
+                }
+              </div>
+            `,
+            buttons: [
+              ...(state.cloud.configured && !cfg.fromCode
+                ? [
+                    {
+                      label: '연동 해제',
+                      variant: 'danger',
+                      onClick: async () => {
+                        clearSupabaseConfig();
+                        await initSupabaseClient();
+                        closeModal();
+                        showToast('클라우드 연동 설정을 해제했습니다.', 'info');
+                      }
+                    }
+                  ]
+                : []),
+              { label: '닫기', variant: 'secondary', onClick: closeModal },
+              {
+                label: '저장 및 연결',
+                variant: 'primary',
+                onClick: async () => {
+                  const urlVal = document.getElementById('sb-url-input').value.trim();
+                  const keyVal = document.getElementById('sb-key-input').value.trim();
+                  if (!urlVal.startsWith('https://') || !keyVal) {
+                    showToast('올바른 Supabase Project URL(https://...)과 키를 입력해 주세요.', 'warning');
+                    return;
+                  }
+                  saveSupabaseConfig(urlVal, keyVal);
+                  const ok = await initSupabaseClient();
+                  if (ok) {
+                    showToast('Supabase 프로젝트에 연결되었습니다! 이제 로그인하세요.', 'success');
+                    openCloudModal(false);
+                  } else {
+                    showToast('Supabase 연결에 실패했습니다. URL과 키를 다시 확인해 주세요.', 'error');
+                  }
+                }
+              }
+            ],
+            onMount: () => {
+              const copyBtn = document.getElementById('btn-copy-sb-sql');
+              if (copyBtn) {
+                copyBtn.addEventListener('click', () => {
+                  const copied = copyTextSafely(SUPABASE_SETUP_SQL);
+                  showToast(
+                    copied ? '보안 SQL을 클립보드에 복사했습니다. SQL Editor에 붙여넣어 실행하세요!' : '복사에 실패했습니다. 미리보기에서 직접 복사해 주세요.',
+                    copied ? 'success' : 'warning'
+                  );
+                });
+              }
+            }
+          });
+          return;
+        }
+
+        // 2) 설정 완료 · 미로그인 상태 -> 로그인 / 회원가입 화면
+        if (!state.cloud.user) {
+          let authMode = 'signin';
+          openModal({
+            title: '클라우드 계정 로그인',
+            maxWidth: 'max-w-md',
+            bodyHtml: `
+              <div class="space-y-4">
+                <div class="grid grid-cols-2 bg-slate-100 p-1 rounded-xl">
+                  <button id="auth-tab-signin" type="button" class="py-1.5 rounded-lg text-xs font-bold bg-white text-brand-600 shadow-xs transition cursor-pointer">로그인</button>
+                  <button id="auth-tab-signup" type="button" class="py-1.5 rounded-lg text-xs font-semibold text-slate-500 transition cursor-pointer">회원가입</button>
+                </div>
+
+                <div class="space-y-3">
+                  <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">이메일</label>
+                    <input id="auth-email-input" type="email" autocomplete="email" placeholder="name@example.com" class="w-full text-sm border border-slate-200 focus:border-brand-500 rounded-lg px-3 py-2 outline-none" />
+                  </div>
+                  <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">비밀번호 (6자 이상)</label>
+                    <input id="auth-password-input" type="password" autocomplete="current-password" placeholder="비밀번호 입력" class="w-full text-sm border border-slate-200 focus:border-brand-500 rounded-lg px-3 py-2 outline-none" />
+                  </div>
+                  <div id="auth-feedback" class="hidden rounded-lg px-3 py-2 text-xs leading-relaxed"></div>
+                </div>
+
+                <div class="flex items-center justify-between pt-1 text-[11px] text-slate-400">
+                  <span>로그인 시 내 악보 DB와 콘티가 자동 동기화됩니다.</span>
+                  <button id="btn-open-sb-settings" type="button" class="text-slate-500 hover:text-brand-600 underline shrink-0 ml-2 cursor-pointer">연동 설정</button>
+                </div>
+              </div>
+            `,
+            buttons: [
+              { label: '취소', variant: 'secondary', onClick: closeModal },
+              {
+                label: '로그인',
+                variant: 'primary',
+                onClick: async () => {
+                  const email = document.getElementById('auth-email-input').value.trim();
+                  const password = document.getElementById('auth-password-input').value;
+                  const feedbackEl = document.getElementById('auth-feedback');
+                  const submitBtn = els.modalFooter.lastElementChild;
+
+                  if (!email || !password || password.length < 6) {
+                    feedbackEl.className = 'rounded-lg px-3 py-2 text-xs bg-amber-50 text-amber-800 border border-amber-200';
+                    feedbackEl.textContent = '이메일과 6자 이상의 비밀번호를 입력해 주세요.';
+                    return;
+                  }
+
+                  submitBtn.disabled = true;
+                  submitBtn.classList.add('opacity-60', 'pointer-events-none');
+                  feedbackEl.className = 'hidden';
+
+                  try {
+                    if (authMode === 'signin') {
+                      const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+                      if (error) throw error;
+                      state.cloud.user = data.user;
+                      renderCloudAccountButton();
+                      closeModal();
+                      showToast(`${email} 계정으로 로그인했습니다.`, 'success');
+                      syncWithCloud({ silent: false });
+                    } else {
+                      const { data, error } = await supabaseClient.auth.signUp({ email, password });
+                      if (error) throw error;
+                      if (data.session && data.user) {
+                        state.cloud.user = data.user;
+                        renderCloudAccountButton();
+                        closeModal();
+                        showToast('회원가입 및 자동 로그인이 완료되었습니다!', 'success');
+                        syncWithCloud({ silent: false });
+                      } else {
+                        feedbackEl.className = 'rounded-lg px-3 py-2 text-xs bg-emerald-50 text-emerald-800 border border-emerald-200';
+                        feedbackEl.textContent = '가입 확인 메일을 발송했습니다! 이메일함에서 인증 링크를 누른 뒤 로그인해 주세요. (Supabase 설정에서 Confirm Email을 끄면 즉시 로그인할 수 있습니다.)';
+                        submitBtn.disabled = false;
+                        submitBtn.classList.remove('opacity-60', 'pointer-events-none');
+                      }
+                    }
+                  } catch (err) {
+                    console.error('인증 오류:', err);
+                    feedbackEl.className = 'rounded-lg px-3 py-2 text-xs bg-rose-50 text-rose-700 border border-rose-200';
+                    const rawMsg = String(err?.message || '');
+                    if (rawMsg.includes('Invalid login credentials')) {
+                      feedbackEl.textContent = '이메일 또는 비밀번호가 올바르지 않습니다.';
+                    } else if (rawMsg.includes('Email not confirmed')) {
+                      feedbackEl.textContent = '이메일 인증이 완료되지 않았습니다. 메일함의 인증 링크를 확인해 주세요.';
+                    } else if (rawMsg.includes('User already registered')) {
+                      feedbackEl.textContent = '이미 가입된 이메일입니다. [로그인] 탭에서 로그인해 주세요.';
+                    } else {
+                      feedbackEl.textContent = rawMsg || '로그인 처리 중 오류가 발생했습니다.';
+                    }
+                    submitBtn.disabled = false;
+                    submitBtn.classList.remove('opacity-60', 'pointer-events-none');
+                  }
+                }
+              }
+            ],
+            onMount: () => {
+              const tabSignin = document.getElementById('auth-tab-signin');
+              const tabSignup = document.getElementById('auth-tab-signup');
+              const submitBtn = els.modalFooter.lastElementChild;
+              const emailInp = document.getElementById('auth-email-input');
+              const pwInp = document.getElementById('auth-password-input');
+
+              const setMode = (mode) => {
+                authMode = mode;
+                const isSignIn = mode === 'signin';
+                tabSignin.className = isSignIn
+                  ? 'py-1.5 rounded-lg text-xs font-bold bg-white text-brand-600 shadow-xs transition cursor-pointer'
+                  : 'py-1.5 rounded-lg text-xs font-semibold text-slate-500 transition cursor-pointer';
+                tabSignup.className = !isSignIn
+                  ? 'py-1.5 rounded-lg text-xs font-bold bg-white text-brand-600 shadow-xs transition cursor-pointer'
+                  : 'py-1.5 rounded-lg text-xs font-semibold text-slate-500 transition cursor-pointer';
+                submitBtn.textContent = isSignIn ? '로그인' : '회원가입';
+              };
+
+              tabSignin.addEventListener('click', () => setMode('signin'));
+              tabSignup.addEventListener('click', () => setMode('signup'));
+              document.getElementById('btn-open-sb-settings').addEventListener('click', () => openCloudModal(true));
+
+              pwInp.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') submitBtn.click();
+              });
+              emailInp.focus();
+            }
+          });
+          return;
+        }
+
+        // 3) 로그인 완료 상태 -> 동기화 상태 및 계정 관리 모달
+        const user = state.cloud.user;
+        openModal({
+          title: '클라우드 계정 및 동기화',
+          maxWidth: 'max-w-md',
+          bodyHtml: `
+            <div class="space-y-4">
+              <div class="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center shrink-0 text-sm">
+                  ${escapeHtml((user.email || 'U').charAt(0).toUpperCase())}
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="text-sm font-bold text-slate-900 truncate">${escapeHtml(user.email || '로그인된 계정')}</div>
+                  <div class="text-[11px] text-emerald-700 mt-0.5">
+                    ${state.cloud.syncing ? '동기화 진행 중...' : `최근 동기화: ${formatDateTimeKorean(state.cloud.lastSyncedAt)}`}
+                  </div>
+                </div>
+              </div>
+
+              <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 flex items-center justify-between">
+                <span>동기화된 데이터 현황</span>
+                <strong class="text-slate-900">악보 ${state.dbSheets.length}개 · 콘티 ${state.dbContis.length}개</strong>
+              </div>
+
+              <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                <input id="chk-clear-local-on-logout" type="checkbox" class="w-4 h-4 rounded accent-rose-600 cursor-pointer" />
+                <span>로그아웃 시 이 기기의 로컬 캐시(악보·콘티)도 함께 비우기</span>
+              </label>
+
+              <div class="flex items-center justify-between pt-1">
+                <button id="btn-account-sb-settings" type="button" class="text-[11px] text-slate-500 hover:text-brand-600 underline cursor-pointer">Supabase 연결 설정 / SQL 보기</button>
+              </div>
+            </div>
+          `,
+          buttons: [
+            {
+              label: '로그아웃',
+              variant: 'danger',
+              onClick: async () => {
+                const clearLocal = !!document.getElementById('chk-clear-local-on-logout')?.checked;
+                try {
+                  await supabaseClient.auth.signOut();
+                  state.cloud.user = null;
+                  state.cloud.lastSyncedAt = null;
+                  if (clearLocal) {
+                    await dbClear(STORE_SHEETS);
+                    await dbClear(STORE_CONTIS);
+                    state.dbSheets.forEach((s) => revokeSheetUrls(s.id));
+                    state.dbSheets = [];
+                    state.dbContis = [];
+                    state.selectedDbSheetIds.clear();
+                    state.conti = createFreshConti();
+                    state.isDirty = false;
+                    renderHeaderStatus();
+                    renderContiList();
+                    renderDbList();
+                    renderSavedContiList();
+                    renderPreview();
+                  }
+                  renderCloudAccountButton();
+                  closeModal();
+                  showToast('로그아웃했습니다.', 'info');
+                } catch (err) {
+                  console.error('로그아웃 오류:', err);
+                  showToast('로그아웃 중 오류가 발생했습니다.', 'error');
+                }
+              }
+            },
+            { label: '닫기', variant: 'secondary', onClick: closeModal },
+            {
+              label: '지금 동기화',
+              variant: 'primary',
+              onClick: async () => {
+                closeModal();
+                await syncWithCloud({ silent: false });
+              }
+            }
+          ],
+          onMount: () => {
+            document.getElementById('btn-account-sb-settings').addEventListener('click', () => openCloudModal(true));
+          }
         });
       }
 
@@ -3593,6 +4552,7 @@
         });
 
         // 상단 액션 버튼
+        els.btnCloudAccount.addEventListener('click', () => openCloudModal(false));
         els.btnNewConti.addEventListener('click', createNewConti);
         els.btnSaveConti.addEventListener('click', () => saveCurrentConti({ asNew: false }));
         els.btnPrintPdf.addEventListener('click', triggerPrint);
@@ -3838,6 +4798,9 @@
           console.error('초기 데이터베이스 로드 오류:', err);
           showToast('로컬 데이터베이스 초기화 중 문제가 발생했습니다.', 'error');
         }
+
+        // Supabase 클라우드 연결 및 자동 세션 복원
+        await initSupabaseClient();
       }
 
       if (document.readyState === 'loading') {
