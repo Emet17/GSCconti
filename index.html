@@ -931,6 +931,60 @@
          4. 애플리케이션 상태 (State) 및 기본 설정
       ======================================================= */
       const LAYOUT_STORAGE_KEY = 'praiseConti_lastLayout_v1';
+      const PDF_FILENAME_PATTERN_KEY = 'praiseConti_pdfFilenamePattern_v1';
+      const DEFAULT_PDF_FILENAME_PATTERN = '{날짜}_{제목}';
+
+      function loadPdfFilenamePattern() {
+        try {
+          const saved = localStorage.getItem(PDF_FILENAME_PATTERN_KEY);
+          if (saved && saved.trim()) return normalizeNFC(saved);
+        } catch (err) {
+          console.warn('저장된 파일명 형식 불러오기 실패:', err);
+        }
+        return DEFAULT_PDF_FILENAME_PATTERN;
+      }
+
+      function savePdfFilenamePattern(pattern) {
+        try {
+          const value = normalizeNFC(pattern || '').trim() || DEFAULT_PDF_FILENAME_PATTERN;
+          localStorage.setItem(PDF_FILENAME_PATTERN_KEY, value);
+        } catch (err) {
+          console.warn('파일명 형식 저장 실패:', err);
+        }
+      }
+
+      /**
+       * 사용자가 지정한 파일명 형식({날짜}, {YYMMDD}, {YYYY}, {MM}, {DD}, {제목}, {곡수})을
+       * 실제 파일명(확장자 제외)으로 변환합니다.
+       */
+      function buildPdfFilenameFromPattern(pattern) {
+        const rawPattern = normalizeNFC(pattern || '').trim() || DEFAULT_PDF_FILENAME_PATTERN;
+        const dateStr = (state.conti.date || getTodayDateString()).trim();
+        const [yyyy = '', mm = '', dd = ''] = dateStr.split('-');
+        const yymmdd = yyyy && mm && dd ? `${yyyy.slice(-2)}${mm}${dd}` : dateStr.replace(/-/g, '');
+        const titleStr = normalizeNFC(state.conti.title || '').trim() || '찬양콘티';
+        const countStr = `${state.conti.items.length}곡`;
+
+        const replaced = rawPattern
+          .replace(/\{날짜\}/g, dateStr)
+          .replace(/\{YYYY\}/g, yyyy)
+          .replace(/\{MM\}/g, mm)
+          .replace(/\{DD\}/g, dd)
+          .replace(/\{YYMMDD\}/g, yymmdd)
+          .replace(/\{제목\}/g, titleStr)
+          .replace(/\{곡수\}/g, countStr);
+
+        return sanitizePdfBaseName(replaced);
+      }
+
+      function sanitizePdfBaseName(name) {
+        const cleaned = normalizeNFC(name || '')
+          .replace(/\.pdf$/i, '')
+          .replace(/[\\/:*?"<>|]/g, '_')
+          .replace(/\s+/g, ' ')
+          .trim();
+        return cleaned || '찬양콘티';
+      }
 
       function createDefaultLayout() {
         return {
@@ -2541,9 +2595,11 @@
       }
 
       /**
-       * 전체 콘티를 실제 A4 PDF 파일로 직접 생성하여 다운로드합니다.
+       * 전체 콘티를 실제 A4 PDF 파일로 직접 생성하여 저장합니다.
+       * fileHandle이 제공되면 사용자가 선택한 위치/파일명으로 직접 저장하고,
+       * 그렇지 않으면 지정된 파일명으로 브라우저 다운로드를 실행합니다.
        */
-      async function exportContiToPdf(onProgress) {
+      async function exportContiToPdf({ fileName = '찬양콘티.pdf', fileHandle = null, onProgress = null } = {}) {
         if (!window.jspdf || !window.jspdf.jsPDF) {
           throw new Error('PDF 생성 라이브러리(jsPDF)가 로드되지 않았습니다. 인터넷 연결을 확인하거나 브라우저 인쇄를 이용해 주세요.');
         }
@@ -2577,10 +2633,18 @@
           pdf.addImage(imgData, 'JPEG', 0, 0, pageMmW, pageMmH, undefined, 'FAST');
         }
 
-        const safeFileName = (state.conti.title || '찬양콘티')
-          .replace(/[\\/:*?"<>|]/g, '_')
-          .trim() || '찬양콘티';
-        pdf.save(`${safeFileName}.pdf`);
+        const finalFileName = `${sanitizePdfBaseName(fileName)}.pdf`;
+
+        if (fileHandle) {
+          const pdfBlob = pdf.output('blob');
+          const writable = await fileHandle.createWritable();
+          await writable.write(pdfBlob);
+          await writable.close();
+          return finalFileName;
+        }
+
+        pdf.save(finalFileName);
+        return finalFileName;
       }
 
       function triggerPrint() {
@@ -2599,9 +2663,13 @@
 
         const L = state.conti.layout;
         const pageCount = Math.ceil(state.conti.items.length / (Number(L.perPage) || 1));
+        const savedPattern = loadPdfFilenamePattern();
+        const initialBaseName = buildPdfFilenameFromPattern(savedPattern);
+        const supportsSavePicker = typeof window.showSaveFilePicker === 'function' && !isInIframe;
 
         openModal({
           title: '인쇄 / PDF 저장',
+          maxWidth: 'max-w-lg',
           bodyHtml: `
             <div class="space-y-3.5">
               <div class="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-600 flex items-center justify-between">
@@ -2609,34 +2677,78 @@
                 <strong class="text-slate-900">총 ${pageCount}페이지 (${state.conti.items.length}곡)</strong>
               </div>
 
-              <button id="modal-btn-export-pdf" type="button" class="w-full p-3.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-left flex items-center gap-3 shadow-sm transition cursor-pointer">
-                <div class="w-10 h-10 rounded-lg bg-white/15 flex items-center justify-center shrink-0">
-                  <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
+              <!-- PDF 파일명 & 기본 형식 설정 -->
+              <div class="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2.5">
+                <div>
+                  <div class="flex items-center justify-between mb-1">
+                    <label for="modal-pdf-pattern" class="text-[11px] font-bold text-slate-700">기본 파일명 형식 (자동 기억)</label>
+                    <span class="text-[10px] text-slate-400">변수: {날짜} {YYMMDD} {제목} {곡수}</span>
+                  </div>
+                  <input
+                    id="modal-pdf-pattern"
+                    type="text"
+                    value="${escapeHtml(savedPattern)}"
+                    placeholder="예: {날짜}_{제목}"
+                    class="w-full text-xs bg-white border border-slate-200 focus:border-brand-500 rounded-lg px-2.5 py-1.5 outline-none transition"
+                  />
+                  <div class="flex flex-wrap gap-1 mt-1.5">
+                    <button type="button" data-pattern="{날짜}_{제목}" class="pdf-pattern-preset px-2 py-0.5 rounded-md text-[10px] font-medium bg-white border border-slate-200 text-slate-600 hover:border-brand-300 hover:text-brand-700 transition cursor-pointer">{날짜}_{제목}</button>
+                    <button type="button" data-pattern="{제목}_{날짜}" class="pdf-pattern-preset px-2 py-0.5 rounded-md text-[10px] font-medium bg-white border border-slate-200 text-slate-600 hover:border-brand-300 hover:text-brand-700 transition cursor-pointer">{제목}_{날짜}</button>
+                    <button type="button" data-pattern="{YYMMDD} {제목}" class="pdf-pattern-preset px-2 py-0.5 rounded-md text-[10px] font-medium bg-white border border-slate-200 text-slate-600 hover:border-brand-300 hover:text-brand-700 transition cursor-pointer">{YYMMDD} {제목}</button>
+                    <button type="button" data-pattern="{제목} ({곡수})" class="pdf-pattern-preset px-2 py-0.5 rounded-md text-[10px] font-medium bg-white border border-slate-200 text-slate-600 hover:border-brand-300 hover:text-brand-700 transition cursor-pointer">{제목} ({곡수})</button>
+                    <button type="button" data-pattern="{제목}" class="pdf-pattern-preset px-2 py-0.5 rounded-md text-[10px] font-medium bg-white border border-slate-200 text-slate-600 hover:border-brand-300 hover:text-brand-700 transition cursor-pointer">{제목}</button>
+                  </div>
                 </div>
-                <div class="min-w-0 flex-1">
-                  <div id="modal-pdf-title" class="text-sm font-bold">A4 PDF 파일로 바로 저장 (추천)</div>
-                  <div id="modal-pdf-desc" class="text-[11px] text-indigo-100 mt-0.5">미리보기 창에서도 즉시 고화질 A4 PDF 파일을 내려받습니다.</div>
-                </div>
-              </button>
 
-              <button id="modal-btn-native-print" type="button" class="w-full p-3.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 text-left flex items-center gap-3 transition cursor-pointer">
-                <div class="w-10 h-10 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
-                  <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                  </svg>
+                <div class="pt-2 border-t border-slate-200/80">
+                  <label for="modal-pdf-filename" class="block text-[11px] font-bold text-slate-700 mb-1">저장할 파일명</label>
+                  <div class="flex items-center bg-white border border-slate-200 focus-within:border-brand-500 rounded-lg overflow-hidden transition">
+                    <input
+                      id="modal-pdf-filename"
+                      type="text"
+                      value="${escapeHtml(initialBaseName)}"
+                      class="flex-1 min-w-0 text-xs sm:text-sm font-medium text-slate-800 px-2.5 py-1.5 outline-none"
+                    />
+                    <span class="px-2.5 py-1.5 text-xs font-semibold text-slate-400 bg-slate-50 border-l border-slate-200 shrink-0">.pdf</span>
+                  </div>
                 </div>
-                <div class="min-w-0 flex-1">
-                  <div class="text-sm font-bold">브라우저 인쇄 창 열기</div>
-                  <div class="text-[11px] text-slate-500 mt-0.5">프린터 직접 출력 (독립 브라우저 탭에서 실행 시 정상 작동)</div>
-                </div>
-              </button>
+              </div>
+
+              <!-- 동등한 선택 버튼 (강조 없음) -->
+              <div class="space-y-2">
+                <button id="modal-btn-export-pdf" type="button" class="w-full p-3.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-800 text-left flex items-center gap-3 transition cursor-pointer">
+                  <div class="w-10 h-10 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div id="modal-pdf-title" class="text-sm font-bold text-slate-800">A4 PDF 파일로 저장</div>
+                    <div id="modal-pdf-desc" class="text-[11px] text-slate-500 mt-0.5">${
+                      supportsSavePicker
+                        ? '저장 위치와 파일명을 직접 선택해 고화질 A4 PDF로 저장합니다.'
+                        : '지정한 파일명으로 고화질 A4 PDF 파일을 내려받습니다.'
+                    }</div>
+                  </div>
+                </button>
+
+                <button id="modal-btn-native-print" type="button" class="w-full p-3.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-800 text-left flex items-center gap-3 transition cursor-pointer">
+                  <div class="w-10 h-10 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                    </svg>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div class="text-sm font-bold text-slate-800">브라우저 인쇄 창 열기</div>
+                    <div class="text-[11px] text-slate-500 mt-0.5">프린터 직접 출력 (독립 브라우저 탭에서 실행 시 정상 작동)</div>
+                  </div>
+                </button>
+              </div>
 
               ${
                 isInIframe
                   ? `<div class="rounded-xl bg-amber-50 border border-amber-200/80 p-3 text-[11px] text-amber-800 leading-relaxed">
-                      <strong>안내:</strong> 현재 앱이 미리보기(iframe) 화면에서 실행 중입니다. 미리보기에서는 브라우저 보안상 시스템 인쇄 창이 차단될 수 있으므로, 위의 <strong>[A4 PDF 파일로 바로 저장]</strong>을 사용하시면 PDF로 내려받아 바로 인쇄하실 수 있습니다.
+                      <strong>안내:</strong> 현재 미리보기(iframe) 화면에서는 브라우저 보안 정책상 시스템 인쇄 창이나 폴더 선택 창이 제한될 수 있습니다. 독립 웹앱 탭(GitHub Pages 등)에서 여시면 저장 폴더 선택과 직접 인쇄가 모두 정상 작동합니다.
                     </div>`
                   : ''
               }
@@ -2644,27 +2756,84 @@
           `,
           buttons: [{ label: '닫기', variant: 'secondary', onClick: closeModal }],
           onMount: () => {
+            const patternInput = document.getElementById('modal-pdf-pattern');
+            const filenameInput = document.getElementById('modal-pdf-filename');
+            const presetBtns = Array.from(document.querySelectorAll('.pdf-pattern-preset'));
             const pdfBtn = document.getElementById('modal-btn-export-pdf');
             const pdfTitle = document.getElementById('modal-pdf-title');
             const pdfDesc = document.getElementById('modal-pdf-desc');
             const printBtn = document.getElementById('modal-btn-native-print');
 
+            const applyPattern = (nextPattern) => {
+              savePdfFilenamePattern(nextPattern);
+              filenameInput.value = buildPdfFilenameFromPattern(nextPattern);
+            };
+
+            patternInput.addEventListener('input', (e) => {
+              applyPattern(e.target.value);
+            });
+
+            presetBtns.forEach((btn) => {
+              btn.addEventListener('click', () => {
+                const pat = btn.dataset.pattern;
+                patternInput.value = pat;
+                applyPattern(pat);
+              });
+            });
+
             pdfBtn.addEventListener('click', async () => {
+              const baseName = sanitizePdfBaseName(filenameInput.value || buildPdfFilenameFromPattern(patternInput.value));
+              const suggestedName = `${baseName}.pdf`;
+              let fileHandle = null;
+
+              // 사용자 클릭 제스처 직후에 저장 위치/파일명 선택 창 호출 (Chrome/Edge 등 지원 브라우저)
+              if (typeof window.showSaveFilePicker === 'function') {
+                try {
+                  fileHandle = await window.showSaveFilePicker({
+                    suggestedName,
+                    types: [
+                      {
+                        description: 'PDF 문서',
+                        accept: { 'application/pdf': ['.pdf'] }
+                      }
+                    ]
+                  });
+                } catch (pickerErr) {
+                  // 사용자가 저장 창에서 '취소'를 누른 경우 저장 중단
+                  if (pickerErr && pickerErr.name === 'AbortError') {
+                    return;
+                  }
+                  // iframe 보안 제한 등으로 폴더 선택 창이 막힌 경우 일반 다운로드로 자동 전환
+                  console.warn('파일 저장 위치 선택 창을 열 수 없어 기본 다운로드로 전환합니다:', pickerErr);
+                  fileHandle = null;
+                }
+              }
+
               pdfBtn.disabled = true;
               pdfBtn.classList.add('opacity-75', 'pointer-events-none');
               pdfTitle.textContent = 'A4 PDF 생성 중...';
               pdfDesc.textContent = '고해상도로 페이지를 렌더링하고 있습니다.';
+
               try {
-                await exportContiToPdf((cur, total) => {
-                  pdfDesc.textContent = `페이지 변환 중 (${cur} / ${total})...`;
+                const savedName = await exportContiToPdf({
+                  fileName: suggestedName,
+                  fileHandle,
+                  onProgress: (cur, total) => {
+                    pdfDesc.textContent = `페이지 변환 중 (${cur} / ${total})...`;
+                  }
                 });
                 closeModal();
-                showToast('A4 PDF 파일 저장을 완료했습니다.', 'success');
+                showToast(
+                  fileHandle
+                    ? `'${fileHandle.name || savedName}' 파일을 선택한 위치에 저장했습니다.`
+                    : `'${savedName}' 파일을 다운로드했습니다.`,
+                  'success'
+                );
               } catch (err) {
                 console.error('PDF 생성 오류:', err);
                 pdfBtn.disabled = false;
                 pdfBtn.classList.remove('opacity-75', 'pointer-events-none');
-                pdfTitle.textContent = 'A4 PDF 파일로 바로 저장 (추천)';
+                pdfTitle.textContent = 'A4 PDF 파일로 저장';
                 pdfDesc.textContent = '다시 시도해 주세요.';
                 showToast(err.message || 'PDF 생성 중 오류가 발생했습니다.', 'error');
               }
