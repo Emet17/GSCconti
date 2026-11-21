@@ -1290,16 +1290,62 @@
       const sheetThumbUrlMap = new Map();
       const croppedUrlCache = new Map();
       const inflightFullDownloadMap = new Map();
+      const signedUrlCache = new Map(); // path -> { url, expiresAt }
 
       function getSheetById(sheetId) {
         return state.dbSheets.find((s) => s.id === sheetId) || null;
+      }
+
+      async function resolveCloudImageBlob(sheetId, path, isThumb = false) {
+        if (!path || !state.cloud.client || !state.cloud.user) return null;
+        try {
+          const cached = signedUrlCache.get(path);
+          let signedUrl = cached && cached.expiresAt > Date.now() ? cached.url : '';
+          if (!signedUrl) {
+            const { data, error } = await state.cloud.client.storage
+              .from(CLOUD_BUCKET)
+              .createSignedUrl(path, 3600);
+            if (error || !data?.signedUrl) throw error || new Error('URL 발급 실패');
+            signedUrl = data.signedUrl;
+            signedUrlCache.set(path, { url: signedUrl, expiresAt: Date.now() + 3000 * 1000 });
+          }
+          const resp = await fetch(signedUrl);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          return await resp.blob();
+        } catch {
+          return null;
+        }
+      }
+
+      async function prefetchCloudSignedUrls(paths) {
+        const cleanPaths = Array.from(new Set((paths || []).filter(Boolean))).filter((p) => {
+          const c = signedUrlCache.get(p);
+          return !c || c.expiresAt <= Date.now();
+        });
+        if (cleanPaths.length === 0 || !state.cloud.client || !state.cloud.user) return;
+        try {
+          const { data } = await state.cloud.client.storage
+            .from(CLOUD_BUCKET)
+            .createSignedUrls(cleanPaths, 3600);
+          if (Array.isArray(data)) {
+            const exp = Date.now() + 3000 * 1000;
+            data.forEach((entry) => {
+              if (entry && entry.path && entry.signedUrl) {
+                signedUrlCache.set(entry.path, { url: entry.signedUrl, expiresAt: exp });
+              }
+            });
+          }
+        } catch {}
       }
 
       async function ensureSheetFullBlob(sheetId, { silent = true } = {}) {
         const sheet = getSheetById(sheetId);
         if (!sheet) return null;
         if (sheet.blob instanceof Blob) return sheet.blob;
-        if (!sheet.cloudImagePath || !state.cloud.client || !state.cloud.user) return null;
+        if (!state.cloud.client || !state.cloud.user) return null;
+
+        const targetPath = sheet.cloudImagePath || `${state.cloud.user.id}/${sheet.id}.jpg`;
+        if (!sheet.cloudImagePath) sheet.cloudImagePath = targetPath;
 
         if (inflightFullDownloadMap.has(sheetId)) {
           return inflightFullDownloadMap.get(sheetId);
@@ -1307,10 +1353,8 @@
 
         const task = (async () => {
           try {
-            const { data: dlMain, error } = await state.cloud.client.storage
-              .from(CLOUD_BUCKET)
-              .download(sheet.cloudImagePath);
-            if (error || !dlMain) throw error || new Error('원본 다운로드 실패');
+            const dlMain = await resolveCloudImageBlob(sheetId, targetPath, false);
+            if (!dlMain) throw new Error('원본 다운로드 실패');
 
             sheet.blob = dlMain;
             if (!(sheet.thumbnailBlob instanceof Blob)) {
@@ -1342,13 +1386,10 @@
           sheetImageUrlMap.set(sheetId, url);
           return url;
         }
-        const fallbackPath = sheet.cloudImagePath || (state.cloud.user ? `${state.cloud.user.id}/${sheet.id}.jpg` : '');
-        if (fallbackPath && state.cloud.client && state.cloud.user) {
-          if (!sheet.cloudImagePath) sheet.cloudImagePath = fallbackPath;
+        if (state.cloud.client && state.cloud.user) {
           ensureSheetFullBlob(sheetId).then((blob) => {
             if (blob && typeof onLoaded === 'function') onLoaded();
           });
-          return getSheetThumbUrl(sheetId);
         }
         return sheet.tempUrl || getSheetThumbUrl(sheetId) || '';
       }
@@ -1364,10 +1405,24 @@
           return url;
         }
         if (state.cloud.client && state.cloud.user) {
-          if (!sheet.cloudImagePath) sheet.cloudImagePath = `${state.cloud.user.id}/${sheet.id}.jpg`;
-          ensureSheetFullBlob(sheetId).then((blob) => {
-            if (blob && typeof onLoaded === 'function') onLoaded();
-          });
+          const thumbPath = sheet.cloudThumbPath || sheet.cloudImagePath || `${state.cloud.user.id}/${sheet.id}.jpg`;
+          const key = `thumb_${sheetId}`;
+          if (!inflightFullDownloadMap.has(key)) {
+            const p = resolveCloudImageBlob(sheetId, thumbPath, true)
+              .then(async (blob) => {
+                if (blob) {
+                  sheet.thumbnailBlob = blob;
+                  await idbPut('sheets', sheet);
+                  if (sheetThumbUrlMap.has(sheetId)) {
+                    try { URL.revokeObjectURL(sheetThumbUrlMap.get(sheetId)); } catch {}
+                    sheetThumbUrlMap.delete(sheetId);
+                  }
+                  if (typeof onLoaded === 'function') onLoaded();
+                }
+              })
+              .finally(() => inflightFullDownloadMap.delete(key));
+            inflightFullDownloadMap.set(key, p);
+          }
         }
         return sheet.tempUrl || '';
       }
@@ -4047,44 +4102,36 @@
             return !local || (rs.updated_at || 0) > (local.updatedAt || 0);
           });
 
-          await runWithConcurrency(sheetsToFetch, 6, async (rs) => {
+          // 4) 악보 메타데이터만 즉시 병합 (이미지 파일은 초기 동기화에서 내려받지 않아 0.3초 내 완료!)
+          for (const rs of remoteSheets) {
             const local = getSheetById(rs.id);
-            const isUpdated = Boolean(local && (rs.updated_at || 0) > (local.updatedAt || 0));
-            let thumbnailBlob = isUpdated ? null : (local?.thumbnailBlob || null);
-
-            if (!thumbnailBlob) {
-              const dlPath = rs.thumb_path || rs.image_path;
-              if (dlPath) {
-                const { data: dlThumb } = await state.cloud.client.storage.from(CLOUD_BUCKET).download(dlPath);
-                if (dlThumb) thumbnailBlob = dlThumb;
-              }
+            if (!local || (rs.updated_at || 0) > (local.updatedAt || 0)) {
+              const isUpdated = Boolean(local && (rs.updated_at || 0) > (local.updatedAt || 0));
+              const merged = {
+                id: rs.id,
+                title: normalizeNFC(rs.title),
+                key: normalizeNFC(rs.chord_key || ''),
+                memo: normalizeNFC(rs.memo || ''),
+                blob: isUpdated ? null : (local?.blob || null),
+                thumbnailBlob: isUpdated ? null : (local?.thumbnailBlob || null),
+                cloudImagePath: rs.image_path || `${uid}/${rs.id}.jpg`,
+                cloudThumbPath: rs.thumb_path || `${uid}/${rs.id}_thumb.jpg`,
+                width: rs.width || 0,
+                height: rs.height || 0,
+                fileSize: rs.file_size || local?.fileSize || 0,
+                createdAt: rs.created_at || Date.now(),
+                updatedAt: rs.updated_at || Date.now(),
+                cloudSynced: true,
+                cloudOwnerId: uid
+              };
+              await idbPut('sheets', merged);
+              revokeSheetUrls(merged.id);
+              const idx = state.dbSheets.findIndex((x) => x.id === merged.id);
+              if (idx >= 0) state.dbSheets[idx] = merged;
+              else state.dbSheets.unshift(merged);
+              changed = true;
             }
-
-            const merged = {
-              id: rs.id,
-              title: normalizeNFC(rs.title),
-              key: normalizeNFC(rs.chord_key || ''),
-              memo: normalizeNFC(rs.memo || ''),
-              blob: isUpdated ? null : (local?.blob || null),
-              thumbnailBlob,
-              cloudImagePath: rs.image_path || `${uid}/${rs.id}.jpg`,
-              cloudThumbPath: rs.thumb_path || `${uid}/${rs.id}_thumb.jpg`,
-              width: rs.width || 0,
-              height: rs.height || 0,
-              fileSize: rs.file_size || local?.fileSize || 0,
-              createdAt: rs.created_at || Date.now(),
-              updatedAt: rs.updated_at || Date.now(),
-              cloudSynced: true,
-              cloudOwnerId: uid
-            };
-
-            await idbPut('sheets', merged);
-            revokeSheetUrls(merged.id);
-            const idx = state.dbSheets.findIndex((x) => x.id === merged.id);
-            if (idx >= 0) state.dbSheets[idx] = merged;
-            else state.dbSheets.unshift(merged);
-            changed = true;
-          });
+          }
 
           if (changed) {
             state.dbSheets.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -4093,6 +4140,14 @@
             renderSavedContiList();
             renderContiList();
             renderPreview();
+          }
+
+          // 현재 화면에 열린 콘티 악보들의 서명 URL만 단 1번의 배치 요청으로 미리 발급
+          const activePaths = state.conti.items
+            .map((it) => getSheetById(it.sheetId)?.cloudImagePath)
+            .filter(Boolean);
+          if (activePaths.length > 0) {
+            prefetchCloudSignedUrls(activePaths).then(() => renderPreview()).catch(() => {});
           }
 
           if (!silent) showToast('클라우드 계정과 동기화가 완료되었습니다.', 'success');
