@@ -38,7 +38,7 @@
   <!-- 동적 @page 방향 제어를 위한 전용 스타일 태그 (JS에서 portrait/landscape 자동 주입) -->
   <style id="dynamic-page-style">
     @page {
-      size: A4 portrait;
+      size: A4 landscape;
       margin: 0;
     }
   </style>
@@ -46,8 +46,8 @@
   <!-- A4 규격 정밀 렌더링, 스크롤바 및 인쇄(@media print) 전용 최소 스타일 -->
   <style>
     :root {
-      --a4-w: 210mm;
-      --a4-h: 297mm;
+      --a4-w: 297mm;
+      --a4-h: 210mm;
     }
 
     body {
@@ -488,7 +488,7 @@
                   <div id="header-fontsize-control" class="pt-2 border-t border-slate-200/70 transition-opacity">
                     <div class="flex justify-between text-xs mb-1">
                       <span class="font-medium text-slate-700">상단 예배 제목 글자 크기</span>
-                      <span id="val-header-fontsize" class="font-bold text-brand-600">10 px</span>
+                      <span id="val-header-fontsize" class="font-bold text-brand-600">12 pt</span>
                     </div>
                     <input id="range-header-fontsize" type="range" min="8" max="24" step="1" class="w-full accent-brand-600 cursor-pointer" />
                   </div>
@@ -583,7 +583,7 @@
               실시간 A4 미리보기
             </span>
             <span class="text-slate-300">|</span>
-            <span id="preview-summary-text" class="truncate">A4 세로 · 페이지당 2곡 · 0페이지</span>
+            <span id="preview-summary-text" class="truncate">A4 가로 · 페이지당 2곡 · 0페이지</span>
           </div>
 
           <!-- 줌 컨트롤 -->
@@ -930,12 +930,14 @@
       /* =======================================================
          4. 애플리케이션 상태 (State) 및 기본 설정
       ======================================================= */
+      const LAYOUT_STORAGE_KEY = 'praiseConti_lastLayout_v1';
+
       function createDefaultLayout() {
         return {
-          orientation: 'portrait', // 'portrait' | 'landscape'
-          perPage: 2,              // 1 | 2 | 3
+          orientation: 'landscape', // 'portrait' | 'landscape'
+          perPage: 2,               // 1 | 2 | 3
           showHeader: true,
-          headerFontSize: 10,      // px (8 ~ 24)
+          headerFontSize: 12,       // pt (8 ~ 24)
           marginMm: 5,
           gapMm: 3,
           grayscale: false,
@@ -944,13 +946,74 @@
         };
       }
 
+      /**
+       * 마지막으로 사용했던 레이아웃 설정값을 localStorage에서 불러옵니다.
+       * 저장된 값이 없거나 손상된 경우 기본 설정값으로 안전하게 대체합니다.
+       */
+      function loadSavedLayout() {
+        const defaults = createDefaultLayout();
+        try {
+          const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+          if (!raw) return defaults;
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== 'object') return defaults;
+
+          return {
+            orientation: parsed.orientation === 'portrait' || parsed.orientation === 'landscape'
+              ? parsed.orientation
+              : defaults.orientation,
+            perPage: [1, 2, 3].includes(Number(parsed.perPage))
+              ? Number(parsed.perPage)
+              : defaults.perPage,
+            showHeader: typeof parsed.showHeader === 'boolean'
+              ? parsed.showHeader
+              : defaults.showHeader,
+            headerFontSize: Number.isFinite(Number(parsed.headerFontSize))
+              ? Math.min(24, Math.max(8, Number(parsed.headerFontSize)))
+              : defaults.headerFontSize,
+            marginMm: Number.isFinite(Number(parsed.marginMm))
+              ? Math.min(18, Math.max(0, Number(parsed.marginMm)))
+              : defaults.marginMm,
+            gapMm: Number.isFinite(Number(parsed.gapMm))
+              ? Math.min(14, Math.max(0, Number(parsed.gapMm)))
+              : defaults.gapMm,
+            grayscale: typeof parsed.grayscale === 'boolean'
+              ? parsed.grayscale
+              : defaults.grayscale,
+            contrast: Number.isFinite(Number(parsed.contrast))
+              ? Math.min(200, Math.max(80, Number(parsed.contrast)))
+              : defaults.contrast,
+            brightness: Number.isFinite(Number(parsed.brightness))
+              ? Math.min(140, Math.max(80, Number(parsed.brightness)))
+              : defaults.brightness
+          };
+        } catch (err) {
+          console.warn('저장된 레이아웃 설정 불러오기 실패:', err);
+          return defaults;
+        }
+      }
+
+      /**
+       * 현재 레이아웃 설정값을 localStorage에 자동 저장합니다.
+       */
+      function saveLastLayout(layout) {
+        try {
+          localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify({
+            ...createDefaultLayout(),
+            ...layout
+          }));
+        } catch (err) {
+          console.warn('레이아웃 설정 저장 실패:', err);
+        }
+      }
+
       function createFreshConti() {
         return {
           id: null,
           title: '',
           date: getTodayDateString(),
           items: [],
-          layout: createDefaultLayout()
+          layout: loadSavedLayout()
         };
       }
 
@@ -2150,10 +2213,10 @@
         els.statusShowHeader.className = `text-[10px] font-bold w-6 text-right ${L.showHeader ? 'text-brand-600' : 'text-slate-400'}`;
 
         // 상단 제목 글자 크기 컨트롤 활성/비활성
-        const headerFontSize = Number(L.headerFontSize) || 10;
+        const headerFontSize = Number(L.headerFontSize) || 12;
         els.rangeHeaderFontSize.value = String(headerFontSize);
         els.rangeHeaderFontSize.disabled = !L.showHeader;
-        els.valHeaderFontSize.textContent = `${headerFontSize} px`;
+        els.valHeaderFontSize.textContent = `${headerFontSize} pt`;
         els.headerFontSizeControl.classList.toggle('opacity-45', !L.showHeader);
         els.headerFontSizeControl.classList.toggle('pointer-events-none', !L.showHeader);
 
@@ -2251,7 +2314,7 @@
           `brightness(${L.brightness}%)`
         ].filter(Boolean).join(' ');
 
-        const headerFontSize = Number(L.headerFontSize) || 10;
+        const headerFontSize = Number(L.headerFontSize) || 12;
 
         pages.forEach((pageItems, pageIndex) => {
           const wrapper = document.createElement('div');
@@ -2273,7 +2336,7 @@
           if (L.showHeader) {
             const headerEl = document.createElement('div');
             headerEl.className = 'shrink-0 flex items-baseline justify-between gap-2 border-b border-slate-300 pb-[1mm] mb-[1.4mm] leading-tight';
-            headerEl.style.fontSize = `${headerFontSize}px`;
+            headerEl.style.fontSize = `${headerFontSize}pt`;
             headerEl.innerHTML = `
               <div class="truncate">
                 <span class="font-semibold text-slate-700">${escapeHtml(state.conti.title || '찬양 콘티')}</span>
@@ -2361,7 +2424,7 @@
         const pageMmH = isLandscape ? 210 : 297;
         const DPI = 200;
         const pxPerMm = DPI / 25.4;
-        const cssPxToCanvas = DPI / 96;
+        const ptToCanvasPx = DPI / 72;
 
         const canvasW = Math.round(pageMmW * pxPerMm);
         const canvasH = Math.round(pageMmH * pxPerMm);
@@ -2384,7 +2447,7 @@
 
         // 1) 상단 예배 제목 1줄 렌더링
         if (L.showHeader) {
-          const headerFontPx = (Number(L.headerFontSize) || 10) * cssPxToCanvas;
+          const headerFontPx = (Number(L.headerFontSize) || 12) * ptToCanvasPx;
           const lineH = headerFontPx * 1.25;
           const titleText = state.conti.title ? state.conti.title : '찬양 콘티';
           const dateText = state.conti.date ? ` (${state.conti.date})` : '';
@@ -2713,6 +2776,7 @@
         els.orientationBtns.forEach((btn) => {
           btn.addEventListener('click', () => {
             state.conti.layout.orientation = btn.dataset.orientation;
+            saveLastLayout(state.conti.layout);
             markDirty();
             syncLayoutControlsFromState();
             renderPreview();
@@ -2722,6 +2786,7 @@
         els.perpageBtns.forEach((btn) => {
           btn.addEventListener('click', () => {
             state.conti.layout.perPage = Number(btn.dataset.perpage);
+            saveLastLayout(state.conti.layout);
             markDirty();
             syncLayoutControlsFromState();
             renderPreview();
@@ -2730,6 +2795,7 @@
 
         els.toggleShowHeader.addEventListener('change', (e) => {
           state.conti.layout.showHeader = e.target.checked;
+          saveLastLayout(state.conti.layout);
           markDirty();
           syncLayoutControlsFromState();
           renderPreview();
@@ -2738,7 +2804,8 @@
         els.rangeHeaderFontSize.addEventListener('input', (e) => {
           const val = Number(e.target.value);
           state.conti.layout.headerFontSize = val;
-          els.valHeaderFontSize.textContent = `${val} px`;
+          els.valHeaderFontSize.textContent = `${val} pt`;
+          saveLastLayout(state.conti.layout);
           markDirty();
           renderPreview();
         });
@@ -2747,6 +2814,7 @@
           const val = Number(e.target.value);
           state.conti.layout.marginMm = val;
           els.valMargin.textContent = `${val} mm`;
+          saveLastLayout(state.conti.layout);
           markDirty();
           renderPreview();
         });
@@ -2755,12 +2823,14 @@
           const val = Number(e.target.value);
           state.conti.layout.gapMm = val;
           els.valGap.textContent = `${val} mm`;
+          saveLastLayout(state.conti.layout);
           markDirty();
           renderPreview();
         });
 
         els.toggleGrayscale.addEventListener('change', (e) => {
           state.conti.layout.grayscale = e.target.checked;
+          saveLastLayout(state.conti.layout);
           markDirty();
           syncLayoutControlsFromState();
           renderPreview();
@@ -2770,6 +2840,7 @@
           const val = Number(e.target.value);
           state.conti.layout.contrast = val;
           els.valContrast.textContent = `${val}%`;
+          saveLastLayout(state.conti.layout);
           markDirty();
           renderPreview();
         });
@@ -2778,6 +2849,7 @@
           const val = Number(e.target.value);
           state.conti.layout.brightness = val;
           els.valBrightness.textContent = `${val}%`;
+          saveLastLayout(state.conti.layout);
           markDirty();
           renderPreview();
         });
@@ -2786,6 +2858,7 @@
           state.conti.layout.grayscale = false;
           state.conti.layout.contrast = 105;
           state.conti.layout.brightness = 100;
+          saveLastLayout(state.conti.layout);
           markDirty();
           syncLayoutControlsFromState();
           renderPreview();
