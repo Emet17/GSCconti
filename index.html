@@ -366,6 +366,40 @@
               </div>
             </div>
 
+            <!-- 데이터 백업 / 불러오기 바 (악보 DB · 콘티 통합) -->
+            <div class="flex items-center justify-between gap-2 bg-white border border-slate-200/90 rounded-xl px-3 py-2 shadow-2xs">
+              <div class="flex items-center gap-1.5 text-[11px] font-medium text-slate-600 truncate">
+                <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                <span class="truncate">DB · 콘티 백업 파일 관리</span>
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button id="btn-db-backup-export" type="button" class="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-slate-700 hover:text-brand-700 bg-slate-50 hover:bg-brand-50 border border-slate-200 hover:border-brand-200 transition cursor-pointer">
+                  백업 저장
+                </button>
+                <button id="btn-db-backup-import" type="button" class="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-brand-700 hover:text-brand-800 bg-brand-50/70 hover:bg-brand-100 border border-brand-200 transition cursor-pointer">
+                  불러오기
+                </button>
+              </div>
+            </div>
+
+            <!-- 다중 선택 일괄 작업 바 -->
+            <div id="db-bulk-bar" class="hidden flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2 shadow-2xs transition">
+              <label class="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer select-none min-w-0">
+                <input id="db-select-all" type="checkbox" class="w-4 h-4 rounded border-slate-300 text-brand-600 accent-brand-600 cursor-pointer shrink-0" />
+                <span id="db-selected-count-text" class="truncate">전체 선택</span>
+              </label>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button id="btn-db-bulk-add" type="button" disabled class="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-brand-600 hover:bg-brand-700 text-white disabled:bg-slate-200 disabled:text-slate-400 disabled:pointer-events-none transition cursor-pointer">
+                  선택 추가
+                </button>
+                <button id="btn-db-bulk-delete" type="button" disabled class="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:pointer-events-none transition cursor-pointer">
+                  선택 삭제
+                </button>
+              </div>
+            </div>
+
             <!-- DB 악보 목록 -->
             <div id="db-list" class="space-y-2 pb-6">
               <!-- JS로 동적 렌더링 -->
@@ -390,6 +424,24 @@
                 <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
                 다른 이름 저장
               </button>
+            </div>
+
+            <!-- 데이터 백업 / 불러오기 바 (악보 DB · 콘티 통합) -->
+            <div class="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2">
+              <div class="flex items-center gap-1.5 text-[11px] font-medium text-slate-600 truncate">
+                <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                <span class="truncate">전체 데이터 백업 · 복원</span>
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button id="btn-saved-backup-export" type="button" class="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-slate-700 hover:text-brand-700 bg-white border border-slate-200 hover:border-brand-300 shadow-2xs transition cursor-pointer">
+                  백업 저장
+                </button>
+                <button id="btn-saved-backup-import" type="button" class="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-brand-700 hover:text-brand-800 bg-brand-50/70 hover:bg-brand-100 border border-brand-200 shadow-2xs transition cursor-pointer">
+                  불러오기
+                </button>
+              </div>
             </div>
 
             <!-- 저장된 콘티 검색 -->
@@ -651,6 +703,9 @@
   <!-- 토스트 알림 컨테이너 -->
   <!-- ========================================================= -->
   <div id="toast-container" class="no-print fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-sm"></div>
+
+  <!-- 백업 JSON 파일 선택용 숨김 입력 -->
+  <input id="backup-file-input" type="file" accept=".json,application/json" class="hidden" />
 
   <!-- 자주 쓰이는 코드 자동완성 목록 -->
   <datalist id="chord-keys-list">
@@ -1099,6 +1154,7 @@
         dbContis: [],
         dbSearchQuery: '',
         contiSearchQuery: '',
+        selectedDbSheetIds: new Set(),
         zoomMode: 'fit',
         zoomScale: 0.75
       };
@@ -1150,14 +1206,24 @@
         dbTotalSize: document.getElementById('db-total-size'),
         btnDbClearAll: document.getElementById('btn-db-clear-all'),
         btnDbDirectUpload: document.getElementById('btn-db-direct-upload'),
+        btnDbBackupExport: document.getElementById('btn-db-backup-export'),
+        btnDbBackupImport: document.getElementById('btn-db-backup-import'),
+        dbBulkBar: document.getElementById('db-bulk-bar'),
+        dbSelectAll: document.getElementById('db-select-all'),
+        dbSelectedCountText: document.getElementById('db-selected-count-text'),
+        btnDbBulkAdd: document.getElementById('btn-db-bulk-add'),
+        btnDbBulkDelete: document.getElementById('btn-db-bulk-delete'),
         dbList: document.getElementById('db-list'),
 
         // 콘티 관리 탭
         btnSavedNew: document.getElementById('btn-saved-new'),
         btnSavedSave: document.getElementById('btn-saved-save'),
         btnSavedSaveAs: document.getElementById('btn-saved-save-as'),
+        btnSavedBackupExport: document.getElementById('btn-saved-backup-export'),
+        btnSavedBackupImport: document.getElementById('btn-saved-backup-import'),
         contiSearchInput: document.getElementById('conti-search-input'),
         savedContiList: document.getElementById('saved-conti-list'),
+        backupFileInput: document.getElementById('backup-file-input'),
 
         // 레이아웃·인쇄 탭
         orientationBtns: Array.from(document.querySelectorAll('.orientation-btn')),
@@ -1796,6 +1862,59 @@
       /* =======================================================
          13. TAB 2: 악보 DB 검색, 재사용, 수정 및 삭제
       ======================================================= */
+      function getFilteredDbSheets() {
+        const qNorm = normalizeForSearch(state.dbSearchQuery);
+        if (!qNorm) return state.dbSheets;
+        return state.dbSheets.filter((s) => {
+          const target = normalizeForSearch(`${s.title} ${s.key} ${s.memo}`);
+          return target.includes(qNorm);
+        });
+      }
+
+      function syncDbBulkBar(filteredSheets = getFilteredDbSheets()) {
+        // 더 이상 존재하지 않는 악보 ID 정리
+        const existingIds = new Set(state.dbSheets.map((s) => s.id));
+        for (const id of Array.from(state.selectedDbSheetIds)) {
+          if (!existingIds.has(id)) state.selectedDbSheetIds.delete(id);
+        }
+
+        const hasSheets = state.dbSheets.length > 0;
+        els.dbBulkBar.classList.toggle('hidden', !hasSheets);
+        if (!hasSheets) return;
+
+        const totalSelected = state.selectedDbSheetIds.size;
+        const visibleSelectedCount = filteredSheets.filter((s) => state.selectedDbSheetIds.has(s.id)).length;
+
+        els.dbSelectAll.disabled = filteredSheets.length === 0;
+        els.dbSelectAll.checked = filteredSheets.length > 0 && visibleSelectedCount === filteredSheets.length;
+        els.dbSelectAll.indeterminate = visibleSelectedCount > 0 && visibleSelectedCount < filteredSheets.length;
+
+        els.dbSelectedCountText.textContent = totalSelected > 0 ? `${totalSelected}개 선택됨` : '전체 선택';
+        els.dbSelectedCountText.className = totalSelected > 0
+          ? 'truncate font-semibold text-brand-700'
+          : 'truncate text-slate-700';
+
+        els.btnDbBulkAdd.disabled = totalSelected === 0;
+        els.btnDbBulkAdd.textContent = totalSelected > 0 ? `콘티에 추가 (${totalSelected})` : '선택 추가';
+
+        els.btnDbBulkDelete.disabled = totalSelected === 0;
+        els.btnDbBulkDelete.textContent = totalSelected > 0 ? `삭제 (${totalSelected})` : '선택 삭제';
+
+        els.dbBulkBar.classList.toggle('border-brand-300', totalSelected > 0);
+        els.dbBulkBar.classList.toggle('bg-brand-50/40', totalSelected > 0);
+        els.dbBulkBar.classList.toggle('border-slate-200', totalSelected === 0);
+        els.dbBulkBar.classList.toggle('bg-white', totalSelected === 0);
+      }
+
+      function toggleDbSheetSelection(sheetId, checked) {
+        if (checked) {
+          state.selectedDbSheetIds.add(sheetId);
+        } else {
+          state.selectedDbSheetIds.delete(sheetId);
+        }
+        renderDbList();
+      }
+
       function addSheetFromDbToConti(sheet) {
         state.conti.items.push({
           uid: generateId('item'),
@@ -1809,6 +1928,72 @@
         renderDbList();
         renderPreview();
         showToast(`'${sheet.title}' 악보를 콘티에 추가했습니다.`, 'success');
+      }
+
+      function addSelectedDbSheetsToConti() {
+        const sheetMap = new Map(state.dbSheets.map((s) => [s.id, s]));
+        // 사용자가 선택한 순서대로 콘티에 추가
+        const selectedSheets = Array.from(state.selectedDbSheetIds)
+          .map((id) => sheetMap.get(id))
+          .filter(Boolean);
+
+        if (selectedSheets.length === 0) {
+          showToast('콘티에 추가할 악보를 먼저 선택해 주세요.', 'warning');
+          return;
+        }
+
+        selectedSheets.forEach((sheet) => {
+          state.conti.items.push({
+            uid: generateId('item'),
+            sheetId: sheet.id,
+            title: normalizeNFC(sheet.title),
+            key: normalizeNFC(sheet.key),
+            memo: normalizeNFC(sheet.memo)
+          });
+        });
+
+        state.selectedDbSheetIds.clear();
+        markDirty();
+        renderContiList();
+        renderDbList();
+        renderPreview();
+        showToast(`선택한 악보 ${selectedSheets.length}개를 콘티에 추가했습니다.`, 'success');
+      }
+
+      async function deleteSelectedDbSheets() {
+        const sheetMap = new Map(state.dbSheets.map((s) => [s.id, s]));
+        const targetIds = Array.from(state.selectedDbSheetIds).filter((id) => sheetMap.has(id));
+
+        if (targetIds.length === 0) {
+          showToast('삭제할 악보를 먼저 선택해 주세요.', 'warning');
+          return;
+        }
+
+        const ok = await confirmDialog({
+          title: '선택한 악보 일괄 삭제',
+          message: `선택한 악보 ${targetIds.length}개를 데이터베이스에서 영구 삭제하시겠습니까?\n이 악보를 참조하는 현재 콘티 및 저장된 콘티에서는 이미지가 표시되지 않을 수 있습니다.`,
+          confirmLabel: `${targetIds.length}개 삭제`,
+          confirmVariant: 'danger'
+        });
+        if (!ok) return;
+
+        try {
+          await Promise.all(targetIds.map((id) => dbDelete(STORE_SHEETS, id)));
+          const deletedSet = new Set(targetIds);
+          state.dbSheets = state.dbSheets.filter((s) => !deletedSet.has(s.id));
+          targetIds.forEach((id) => {
+            revokeSheetUrls(id);
+            state.selectedDbSheetIds.delete(id);
+          });
+
+          renderDbList();
+          renderContiList();
+          renderPreview();
+          showToast(`선택한 악보 ${targetIds.length}개를 DB에서 삭제했습니다.`, 'info');
+        } catch (err) {
+          console.error('선택 악보 일괄 삭제 오류:', err);
+          showToast('악보 일괄 삭제 중 오류가 발생했습니다.', 'error');
+        }
       }
 
       function openEditDbSheetModal(sheet) {
@@ -1876,6 +2061,7 @@
         try {
           await dbDelete(STORE_SHEETS, sheet.id);
           state.dbSheets = state.dbSheets.filter((s) => s.id !== sheet.id);
+          state.selectedDbSheetIds.delete(sheet.id);
           revokeSheetUrls(sheet.id);
           renderDbList();
           renderContiList();
@@ -1906,6 +2092,7 @@
           await dbClear(STORE_SHEETS);
           state.dbSheets.forEach((s) => revokeSheetUrls(s.id));
           state.dbSheets = [];
+          state.selectedDbSheetIds.clear();
           els.dbSearchInput.value = '';
           state.dbSearchQuery = '';
           renderDbList();
@@ -1927,12 +2114,8 @@
         els.dbSearchClear.classList.toggle('hidden', !state.dbSearchQuery);
 
         const qNorm = normalizeForSearch(state.dbSearchQuery);
-        const filtered = qNorm
-          ? state.dbSheets.filter((s) => {
-              const target = normalizeForSearch(`${s.title} ${s.key} ${s.memo}`);
-              return target.includes(qNorm);
-            })
-          : state.dbSheets;
+        const filtered = getFilteredDbSheets();
+        syncDbBulkBar(filtered);
 
         if (filtered.length === 0) {
           els.dbList.innerHTML = `
@@ -1954,15 +2137,24 @@
         filtered.forEach((sheet) => {
           const thumbUrl = getSheetThumbUrl(sheet.id);
           const isInConti = inContiSheetIds.has(sheet.id);
+          const isSelected = state.selectedDbSheetIds.has(sheet.id);
           const row = document.createElement('div');
-          row.className = 'bg-white border border-slate-200 hover:border-brand-300 rounded-xl p-2.5 flex items-center gap-2.5 shadow-2xs transition';
+          row.className = `border rounded-xl p-2.5 flex items-center gap-2 shadow-2xs transition ${
+            isSelected
+              ? 'bg-brand-50/50 border-brand-400 ring-1 ring-brand-200'
+              : 'bg-white border-slate-200 hover:border-brand-300'
+          }`;
 
           row.innerHTML = `
+            <label class="p-1 -ml-1 flex items-center justify-center shrink-0 cursor-pointer" title="악보 선택">
+              <input type="checkbox" class="db-item-checkbox w-4 h-4 rounded border-slate-300 text-brand-600 accent-brand-600 cursor-pointer" ${isSelected ? 'checked' : ''} />
+            </label>
+
             <button type="button" class="btn-db-zoom w-11 h-14 rounded-lg border border-slate-200 bg-slate-100 overflow-hidden shrink-0 hover:ring-2 hover:ring-brand-300 transition cursor-pointer" title="미리보기">
               ${thumbUrl ? `<img src="${thumbUrl}" alt="${escapeHtml(sheet.title)}" class="w-full h-full object-cover" />` : ''}
             </button>
 
-            <div class="flex-1 min-w-0">
+            <div class="db-item-info flex-1 min-w-0 cursor-pointer">
               <div class="flex items-center gap-1.5">
                 <span class="text-xs sm:text-sm font-semibold text-slate-800 truncate">${escapeHtml(sheet.title)}</span>
                 ${
@@ -1995,6 +2187,12 @@
             </div>
           `;
 
+          row.querySelector('.db-item-checkbox').addEventListener('change', (e) => {
+            toggleDbSheetSelection(sheet.id, e.target.checked);
+          });
+          row.querySelector('.db-item-info').addEventListener('click', () => {
+            toggleDbSheetSelection(sheet.id, !state.selectedDbSheetIds.has(sheet.id));
+          });
           row.querySelector('.btn-db-zoom').addEventListener('click', () => openSheetZoomModal(sheet.id, sheet.title));
           row.querySelector('.btn-db-add').addEventListener('click', () => addSheetFromDbToConti(sheet));
           row.querySelector('.btn-db-edit').addEventListener('click', () => openEditDbSheetModal(sheet));
@@ -2903,6 +3101,467 @@
       }
 
       /* =======================================================
+         18-2. 악보 DB & 콘티 통합 백업 / 불러오기 (JSON)
+      ======================================================= */
+      function blobToDataUrl(blob) {
+        return new Promise((resolve, reject) => {
+          if (!blob) {
+            resolve('');
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error('악보 이미지를 백업 데이터로 변환하지 못했습니다.'));
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      function dataUrlToBlob(dataUrl) {
+        if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
+          return null;
+        }
+        const commaIdx = dataUrl.indexOf(',');
+        if (commaIdx === -1) return null;
+        const meta = dataUrl.slice(5, commaIdx);
+        const base64 = dataUrl.slice(commaIdx + 1);
+        const mimeMatch = meta.match(/^([^;]+)/);
+        const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const binary = atob(base64);
+        const len = binary.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        return new Blob([bytes], { type: mime });
+      }
+
+      function formatDateTimeKorean(isoStr) {
+        if (!isoStr) return '-';
+        const d = new Date(isoStr);
+        if (Number.isNaN(d.getTime())) return '-';
+        return d.toLocaleString('ko-KR', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      }
+
+      function openBackupExportModal() {
+        const sheetCount = state.dbSheets.length;
+        const contiCount = state.dbContis.length;
+        const totalBytes = state.dbSheets.reduce((sum, s) => sum + (s.fileSize || 0), 0);
+
+        if (sheetCount === 0 && contiCount === 0) {
+          showToast('백업할 악보나 저장된 콘티가 아직 없습니다.', 'warning');
+          return;
+        }
+
+        const suggestedFileName = `찬양콘티_백업_${getTodayDateString()}.json`;
+
+        openModal({
+          title: '데이터 백업 저장',
+          maxWidth: 'max-w-md',
+          bodyHtml: `
+            <div class="space-y-3.5">
+              <p class="text-xs text-slate-600 leading-relaxed">
+                현재 브라우저에 저장된 악보 DB와 콘티를 하나의 <strong class="text-slate-800">.json 백업 파일</strong>로 내보냅니다. 다른 PC나 브라우저에서 그대로 불러올 수 있습니다.
+              </p>
+
+              <div class="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-2.5">
+                <label class="flex items-center justify-between gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+                  <span class="inline-flex items-center gap-2">
+                    <input id="backup-chk-sheets" type="checkbox" class="w-4 h-4 rounded accent-brand-600 cursor-pointer" ${sheetCount > 0 ? 'checked' : 'disabled'} />
+                    <span>악보 DB 포함</span>
+                  </span>
+                  <span class="text-[11px] text-slate-500 font-semibold">${sheetCount}개 (${formatBytes(totalBytes)})</span>
+                </label>
+
+                <label class="flex items-center justify-between gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+                  <span class="inline-flex items-center gap-2">
+                    <input id="backup-chk-contis" type="checkbox" class="w-4 h-4 rounded accent-brand-600 cursor-pointer" ${contiCount > 0 ? 'checked' : 'disabled'} />
+                    <span>저장된 콘티 목록 포함</span>
+                  </span>
+                  <span class="text-[11px] text-slate-500 font-semibold">${contiCount}개</span>
+                </label>
+
+                <label class="flex items-center justify-between gap-2 text-xs font-medium text-slate-700 cursor-pointer pt-2 border-t border-slate-200/80">
+                  <span class="inline-flex items-center gap-2">
+                    <input id="backup-chk-prefs" type="checkbox" class="w-4 h-4 rounded accent-brand-600 cursor-pointer" checked />
+                    <span>레이아웃 · PDF 파일명 설정 포함</span>
+                  </span>
+                  <span class="text-[11px] text-slate-400">선택</span>
+                </label>
+              </div>
+
+              ${
+                state.isDirty
+                  ? `<div class="rounded-xl bg-amber-50 border border-amber-200/80 p-2.5 text-[11px] text-amber-800 leading-relaxed">
+                      <strong>참고:</strong> 현재 편집 중인 콘티에 저장하지 않은 변경사항이 있습니다. 함께 백업하려면 먼저 <strong>[콘티 저장]</strong>을 눌러주세요.
+                    </div>`
+                  : ''
+              }
+
+              <div id="modal-backup-progress" class="hidden rounded-xl bg-brand-50 border border-brand-200 px-3 py-2 text-xs font-medium text-brand-700"></div>
+            </div>
+          `,
+          buttons: [
+            { label: '취소', variant: 'secondary', onClick: closeModal },
+            {
+              label: '백업 파일 저장',
+              variant: 'primary',
+              onClick: async () => {
+                const includeSheets = !!document.getElementById('backup-chk-sheets')?.checked;
+                const includeContis = !!document.getElementById('backup-chk-contis')?.checked;
+                const includePrefs = !!document.getElementById('backup-chk-prefs')?.checked;
+
+                if (!includeSheets && !includeContis && !includePrefs) {
+                  showToast('백업할 항목을 하나 이상 선택해 주세요.', 'warning');
+                  return;
+                }
+
+                let fileHandle = null;
+                if (typeof window.showSaveFilePicker === 'function') {
+                  try {
+                    fileHandle = await window.showSaveFilePicker({
+                      suggestedName: suggestedFileName,
+                      types: [
+                        {
+                          description: '찬양 콘티 백업 파일 (JSON)',
+                          accept: { 'application/json': ['.json'] }
+                        }
+                      ]
+                    });
+                  } catch (pickerErr) {
+                    if (pickerErr && pickerErr.name === 'AbortError') return;
+                    fileHandle = null;
+                  }
+                }
+
+                const progressEl = document.getElementById('modal-backup-progress');
+                const footerBtns = els.modalFooter.querySelectorAll('button');
+                footerBtns.forEach((b) => {
+                  b.disabled = true;
+                  b.classList.add('opacity-60', 'pointer-events-none');
+                });
+                progressEl.classList.remove('hidden');
+                progressEl.textContent = '백업 데이터를 생성하는 중입니다...';
+
+                try {
+                  const exportedSheets = [];
+                  if (includeSheets) {
+                    for (let i = 0; i < state.dbSheets.length; i++) {
+                      const s = state.dbSheets[i];
+                      progressEl.textContent = `악보 이미지 변환 중 (${i + 1} / ${state.dbSheets.length})...`;
+                      const imageDataUrl = await blobToDataUrl(s.blob);
+                      const thumbnailDataUrl = s.thumbnailBlob && s.thumbnailBlob !== s.blob
+                        ? await blobToDataUrl(s.thumbnailBlob)
+                        : '';
+                      exportedSheets.push({
+                        id: s.id,
+                        title: normalizeNFC(s.title),
+                        key: normalizeNFC(s.key),
+                        memo: normalizeNFC(s.memo),
+                        width: s.width || 0,
+                        height: s.height || 0,
+                        fileSize: s.fileSize || 0,
+                        createdAt: s.createdAt || Date.now(),
+                        updatedAt: s.updatedAt || Date.now(),
+                        imageDataUrl,
+                        thumbnailDataUrl
+                      });
+                    }
+                  }
+
+                  const exportedContis = includeContis
+                    ? state.dbContis.map((c) => ({
+                        id: c.id,
+                        title: normalizeNFC(c.title),
+                        date: c.date || getTodayDateString(),
+                        items: (c.items || []).map((item) => ({
+                          sheetId: item.sheetId,
+                          title: normalizeNFC(item.title),
+                          key: normalizeNFC(item.key),
+                          memo: normalizeNFC(item.memo)
+                        })),
+                        layout: { ...createDefaultLayout(), ...(c.layout || {}) },
+                        createdAt: c.createdAt || Date.now(),
+                        updatedAt: c.updatedAt || Date.now()
+                      }))
+                    : [];
+
+                  const payload = {
+                    app: 'PraiseContiStudio',
+                    version: 1,
+                    exportedAt: new Date().toISOString(),
+                    sheets: exportedSheets,
+                    contis: exportedContis,
+                    preferences: includePrefs
+                      ? {
+                          lastLayout: loadSavedLayout(),
+                          pdfFilenamePattern: loadPdfFilenamePattern()
+                        }
+                      : null
+                  };
+
+                  progressEl.textContent = '백업 파일 저장 중...';
+                  const jsonBlob = new Blob([JSON.stringify(payload)], { type: 'application/json;charset=utf-8' });
+
+                  if (fileHandle) {
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(jsonBlob);
+                    await writable.close();
+                  } else {
+                    const dlUrl = URL.createObjectURL(jsonBlob);
+                    const a = document.createElement('a');
+                    a.href = dlUrl;
+                    a.download = suggestedFileName;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    setTimeout(() => URL.revokeObjectURL(dlUrl), 1500);
+                  }
+
+                  closeModal();
+                  showToast(
+                    `백업 저장 완료 (악보 ${exportedSheets.length}개 · 콘티 ${exportedContis.length}개)`,
+                    'success'
+                  );
+                } catch (err) {
+                  console.error('백업 내보내기 오류:', err);
+                  progressEl.classList.add('hidden');
+                  footerBtns.forEach((b) => {
+                    b.disabled = false;
+                    b.classList.remove('opacity-60', 'pointer-events-none');
+                  });
+                  showToast(err.message || '백업 파일 생성 중 오류가 발생했습니다.', 'error');
+                }
+              }
+            }
+          ]
+        });
+      }
+
+      function triggerBackupImport() {
+        els.backupFileInput.value = '';
+        els.backupFileInput.click();
+      }
+
+      async function handleBackupFileSelected(file) {
+        if (!file) return;
+
+        let parsed;
+        try {
+          const text = await file.text();
+          parsed = JSON.parse(text);
+        } catch (err) {
+          console.error('백업 파일 파싱 오류:', err);
+          showToast('올바른 JSON 백업 파일이 아닙니다.', 'error');
+          return;
+        }
+
+        const isValid =
+          parsed &&
+          typeof parsed === 'object' &&
+          (Array.isArray(parsed.sheets) || Array.isArray(parsed.contis));
+
+        if (!isValid) {
+          showToast('찬양 콘티 백업 파일 형식이 아닙니다.', 'error');
+          return;
+        }
+
+        const backupSheets = Array.isArray(parsed.sheets) ? parsed.sheets : [];
+        const backupContis = Array.isArray(parsed.contis) ? parsed.contis : [];
+        const hasPrefs = !!(parsed.preferences && typeof parsed.preferences === 'object');
+
+        openModal({
+          title: '백업 파일 불러오기',
+          maxWidth: 'max-w-md',
+          bodyHtml: `
+            <div class="space-y-3.5">
+              <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-1 text-xs">
+                <div class="font-bold text-slate-800 truncate">${escapeHtml(normalizeNFC(file.name))}</div>
+                <div class="text-[11px] text-slate-500">백업 일시: ${escapeHtml(formatDateTimeKorean(parsed.exportedAt))}</div>
+                <div class="pt-1.5 mt-1.5 border-t border-slate-200/80 flex items-center gap-3 text-slate-700 font-semibold">
+                  <span>악보 ${backupSheets.length}개</span>
+                  <span class="text-slate-300">|</span>
+                  <span>콘티 ${backupContis.length}개</span>
+                  ${hasPrefs ? '<span class="text-slate-300">|</span><span>환경 설정 포함</span>' : ''}
+                </div>
+              </div>
+
+              <div class="space-y-2">
+                <div class="text-xs font-bold text-slate-700">불러오기 방식 선택</div>
+
+                <label class="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-white hover:border-brand-300 cursor-pointer transition">
+                  <input type="radio" name="restore-mode" value="merge" checked class="mt-0.5 accent-brand-600 cursor-pointer shrink-0" />
+                  <div>
+                    <div class="text-xs font-bold text-slate-800">기존 데이터에 병합</div>
+                    <div class="text-[11px] text-slate-500 mt-0.5">현재 저장된 악보와 콘티를 유지하고, 백업 파일의 항목을 추가·업데이트합니다.</div>
+                  </div>
+                </label>
+
+                <label class="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-white hover:border-rose-300 cursor-pointer transition">
+                  <input type="radio" name="restore-mode" value="replace" class="mt-0.5 accent-rose-600 cursor-pointer shrink-0" />
+                  <div>
+                    <div class="text-xs font-bold text-rose-700">기존 데이터 초기화 후 덮어쓰기</div>
+                    <div class="text-[11px] text-slate-500 mt-0.5">현재 브라우저의 악보 DB와 저장된 콘티를 모두 비우고 백업 파일 상태로 복원합니다.</div>
+                  </div>
+                </label>
+              </div>
+
+              <div id="modal-restore-progress" class="hidden rounded-xl bg-brand-50 border border-brand-200 px-3 py-2 text-xs font-medium text-brand-700"></div>
+            </div>
+          `,
+          buttons: [
+            { label: '취소', variant: 'secondary', onClick: closeModal },
+            {
+              label: '불러오기 실행',
+              variant: 'primary',
+              onClick: async () => {
+                const modeInput = document.querySelector('input[name="restore-mode"]:checked');
+                const mode = modeInput ? modeInput.value : 'merge';
+
+                const progressEl = document.getElementById('modal-restore-progress');
+                const footerBtns = els.modalFooter.querySelectorAll('button');
+                footerBtns.forEach((b) => {
+                  b.disabled = true;
+                  b.classList.add('opacity-60', 'pointer-events-none');
+                });
+                progressEl.classList.remove('hidden');
+                progressEl.textContent = '백업 데이터를 복원하는 중입니다...';
+
+                try {
+                  if (mode === 'replace') {
+                    await dbClear(STORE_SHEETS);
+                    await dbClear(STORE_CONTIS);
+                    state.dbSheets.forEach((s) => revokeSheetUrls(s.id));
+                    state.selectedDbSheetIds.clear();
+                  }
+
+                  let restoredSheetCount = 0;
+                  for (let i = 0; i < backupSheets.length; i++) {
+                    const raw = backupSheets[i];
+                    if (!raw || !raw.id) continue;
+                    progressEl.textContent = `악보 복원 중 (${i + 1} / ${backupSheets.length})...`;
+
+                    const blob = dataUrlToBlob(raw.imageDataUrl);
+                    if (!blob) continue;
+                    const thumbnailBlob = dataUrlToBlob(raw.thumbnailDataUrl) || blob;
+
+                    const sheetRecord = {
+                      id: String(raw.id),
+                      title: normalizeNFC(raw.title || '제목 없는 악보'),
+                      key: normalizeNFC(raw.key || ''),
+                      memo: normalizeNFC(raw.memo || ''),
+                      blob,
+                      thumbnailBlob,
+                      width: Number(raw.width) || 0,
+                      height: Number(raw.height) || 0,
+                      fileSize: blob.size || Number(raw.fileSize) || 0,
+                      createdAt: Number(raw.createdAt) || Date.now(),
+                      updatedAt: Number(raw.updatedAt) || Date.now()
+                    };
+
+                    await dbPut(STORE_SHEETS, sheetRecord);
+                    setSheetUrls(sheetRecord.id, sheetRecord.blob, sheetRecord.thumbnailBlob);
+                    restoredSheetCount++;
+                  }
+
+                  let restoredContiCount = 0;
+                  for (let i = 0; i < backupContis.length; i++) {
+                    const rawC = backupContis[i];
+                    if (!rawC || !rawC.id) continue;
+                    progressEl.textContent = `콘티 복원 중 (${i + 1} / ${backupContis.length})...`;
+
+                    const contiRecord = {
+                      id: String(rawC.id),
+                      title: normalizeNFC(rawC.title || '찬양 콘티'),
+                      date: rawC.date || getTodayDateString(),
+                      items: Array.isArray(rawC.items)
+                        ? rawC.items.map((item) => ({
+                            sheetId: item.sheetId,
+                            title: normalizeNFC(item.title || ''),
+                            key: normalizeNFC(item.key || ''),
+                            memo: normalizeNFC(item.memo || '')
+                          }))
+                        : [],
+                      layout: { ...createDefaultLayout(), ...(rawC.layout || {}) },
+                      createdAt: Number(rawC.createdAt) || Date.now(),
+                      updatedAt: Number(rawC.updatedAt) || Date.now()
+                    };
+
+                    await dbPut(STORE_CONTIS, contiRecord);
+                    restoredContiCount++;
+                  }
+
+                  if (hasPrefs) {
+                    if (parsed.preferences.lastLayout) {
+                      saveLastLayout(parsed.preferences.lastLayout);
+                      if (state.conti.items.length === 0 && !state.isDirty) {
+                        state.conti.layout = loadSavedLayout();
+                      }
+                    }
+                    if (parsed.preferences.pdfFilenamePattern) {
+                      savePdfFilenamePattern(parsed.preferences.pdfFilenamePattern);
+                    }
+                  }
+
+                  // IndexedDB에서 최신 상태로 메모리 재동기화
+                  const [freshSheets, freshContis] = await Promise.all([
+                    dbGetAll(STORE_SHEETS),
+                    dbGetAll(STORE_CONTIS)
+                  ]);
+
+                  state.dbSheets = freshSheets
+                    .map((s) => ({
+                      ...s,
+                      title: normalizeNFC(s.title),
+                      key: normalizeNFC(s.key),
+                      memo: normalizeNFC(s.memo)
+                    }))
+                    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+                  state.dbContis = freshContis
+                    .map((c) => ({
+                      ...c,
+                      title: normalizeNFC(c.title)
+                    }))
+                    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+                  if (mode === 'replace' && state.conti.id && !state.dbContis.some((c) => c.id === state.conti.id)) {
+                    state.conti.id = null;
+                  }
+
+                  syncLayoutControlsFromState();
+                  renderHeaderStatus();
+                  renderDbList();
+                  renderSavedContiList();
+                  renderContiList();
+                  renderPreview();
+
+                  closeModal();
+                  showToast(
+                    `복원 완료: 악보 ${restoredSheetCount}개 · 콘티 ${restoredContiCount}개를 불러왔습니다.`,
+                    'success'
+                  );
+                } catch (err) {
+                  console.error('백업 불러오기 오류:', err);
+                  progressEl.classList.add('hidden');
+                  footerBtns.forEach((b) => {
+                    b.disabled = false;
+                    b.classList.remove('opacity-60', 'pointer-events-none');
+                  });
+                  showToast('백업 데이터를 불러오는 중 오류가 발생했습니다.', 'error');
+                }
+              }
+            }
+          ]
+        });
+      }
+
+      /* =======================================================
          19. 이벤트 리스너 연결
       ======================================================= */
       function bindEvents() {
@@ -2949,6 +3608,19 @@
           els.sheetFileInput.click();
         });
         els.btnDbClearAll.addEventListener('click', clearAllDbSheets);
+        els.btnDbBackupExport.addEventListener('click', openBackupExportModal);
+        els.btnDbBackupImport.addEventListener('click', triggerBackupImport);
+        els.dbSelectAll.addEventListener('change', (e) => {
+          const filtered = getFilteredDbSheets();
+          if (e.target.checked) {
+            filtered.forEach((s) => state.selectedDbSheetIds.add(s.id));
+          } else {
+            filtered.forEach((s) => state.selectedDbSheetIds.delete(s.id));
+          }
+          renderDbList();
+        });
+        els.btnDbBulkAdd.addEventListener('click', addSelectedDbSheetsToConti);
+        els.btnDbBulkDelete.addEventListener('click', deleteSelectedDbSheets);
         els.sheetFileInput.addEventListener('change', (e) => {
           if (e.target.files && e.target.files.length > 0) {
             handleUploadedFiles(e.target.files, { addToConti: uploadModeAddToConti });
@@ -2989,6 +3661,15 @@
         els.btnSavedNew.addEventListener('click', createNewConti);
         els.btnSavedSave.addEventListener('click', () => saveCurrentConti({ asNew: false }));
         els.btnSavedSaveAs.addEventListener('click', openSaveAsModal);
+        els.btnSavedBackupExport.addEventListener('click', openBackupExportModal);
+        els.btnSavedBackupImport.addEventListener('click', triggerBackupImport);
+        els.backupFileInput.addEventListener('change', (e) => {
+          const file = e.target.files && e.target.files[0];
+          if (file) {
+            handleBackupFileSelected(file);
+            e.target.value = '';
+          }
+        });
         bindKoreanSearchInput(els.contiSearchInput, (q) => {
           state.contiSearchQuery = q;
           renderSavedContiList();
