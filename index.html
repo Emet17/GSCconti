@@ -3133,67 +3133,64 @@
 
         openModal({
           title: `악보 화질 보정 — ${item.title || '악보'}`,
-          maxWidth: 'max-w-2xl',
+          maxWidth: 'max-w-5xl',
           bodyHtml: `
-            <div class="space-y-3.5">
-              <div class="flex flex-wrap items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs">
-                <span class="font-medium ${wasIndividual ? 'text-amber-700' : 'text-slate-600'}">
-                  ${wasIndividual ? '● 현재 이 악보만의 개별 보정이 적용 중입니다.' : '● 현재 [레이아웃·인쇄]의 전체 기본 보정값을 따르고 있습니다.'}
-                </span>
-                <button id="btn-adjust-compare-orig" type="button" class="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 transition cursor-pointer select-none">
+            <div class="grid grid-cols-1 md:grid-cols-12 gap-4 items-stretch">
+              <!-- 좌측: 선명도·밝기·흑백 조절 패널 -->
+              <div class="md:col-span-4 flex flex-col justify-between gap-3">
+                <div class="space-y-3">
+                  <div class="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5 text-xs leading-relaxed">
+                    <span class="font-medium ${wasIndividual ? 'text-amber-700' : 'text-slate-600'}">
+                      ${wasIndividual ? '● 현재 이 악보만의 개별 보정이 적용 중입니다.' : '● 현재 [레이아웃·인쇄]의 전체 기본 보정값을 따르고 있습니다.'}
+                    </span>
+                  </div>
+
+                  <!-- 개별 슬라이더 & 흑백 토글 -->
+                  <div class="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-4">
+                    <label class="flex items-center justify-between gap-2 cursor-pointer">
+                      <div>
+                        <div class="text-xs font-bold text-slate-800">흑백 (그레이스케일)</div>
+                        <div class="text-[11px] text-slate-500">이 악보만 흑백 또는 컬러로 출력</div>
+                      </div>
+                      <div class="flex items-center gap-2 shrink-0">
+                        <span id="adjust-label-gray" class="text-[11px] font-bold ${draft.grayscale ? 'text-brand-600' : 'text-slate-400'}">${draft.grayscale ? 'ON' : 'OFF'}</span>
+                        <input id="adjust-toggle-gray" type="checkbox" ${draft.grayscale ? 'checked' : ''} class="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer" />
+                      </div>
+                    </label>
+
+                    <div class="pt-3 border-t border-slate-200 space-y-4">
+                      <div class="space-y-1.5">
+                        <div class="flex items-center justify-between text-xs">
+                          <span class="font-semibold text-slate-700">선명도 (대비)</span>
+                          <span id="adjust-val-contrast" class="font-bold text-brand-600">${draft.contrast}%</span>
+                        </div>
+                        <input id="adjust-slider-contrast" type="range" min="60" max="220" step="2" value="${draft.contrast}" class="w-full accent-brand-600 cursor-pointer" />
+                      </div>
+                      <div class="space-y-1.5">
+                        <div class="flex items-center justify-between text-xs">
+                          <span class="font-semibold text-slate-700">밝기 (배경 정리)</span>
+                          <span id="adjust-val-brightness" class="font-bold text-brand-600">${draft.brightness}%</span>
+                        </div>
+                        <input id="adjust-slider-brightness" type="range" min="70" max="150" step="2" value="${draft.brightness}" class="w-full accent-brand-600 cursor-pointer" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <button id="btn-adjust-compare-orig" type="button" class="w-full py-2.5 px-3 rounded-xl text-xs font-semibold bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 transition cursor-pointer select-none">
                   👁 누르고 원본 비교
                 </button>
               </div>
 
-              <!-- 실시간 보정 미리보기 영역 -->
-              <div class="bg-slate-200/80 border border-slate-300 rounded-2xl p-3 flex items-center justify-center overflow-hidden min-h-[260px] max-h-[46vh]">
+              <!-- 우측: 대형 실시간 보정 미리보기 -->
+              <div class="md:col-span-8 bg-slate-200/80 border border-slate-300 rounded-2xl p-3 flex items-center justify-center overflow-hidden min-h-[360px] max-h-[68vh]">
                 <img
                   id="adjust-preview-img"
                   src="${previewUrl}"
                   alt="보정 미리보기"
-                  class="max-w-full max-h-[42vh] w-auto h-auto rounded-lg shadow bg-white object-contain"
+                  class="max-w-full max-h-[64vh] w-auto h-auto rounded-lg shadow-md bg-white object-contain"
                   style="filter: ${buildCssFilterFromAdjust(draft)};"
                 />
-              </div>
-
-              <!-- 빠른 보정 프리셋 -->
-              <div class="flex flex-wrap items-center gap-1.5">
-                <span class="text-[11px] font-bold text-slate-500 mr-1">빠른 프리셋:</span>
-                <button type="button" data-preset="crisp" class="btn-adjust-preset px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:border-brand-300 hover:text-brand-700 text-slate-700 transition cursor-pointer">흐린 악보 진하게</button>
-                <button type="button" data-preset="cleanbg" class="btn-adjust-preset px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:border-brand-300 hover:text-brand-700 text-slate-700 transition cursor-pointer">어두운 배경 하얗게</button>
-                <button type="button" data-preset="bwcrisp" class="btn-adjust-preset px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:border-brand-300 hover:text-brand-700 text-slate-700 transition cursor-pointer">흑백 선명</button>
-                <button type="button" data-preset="natural" class="btn-adjust-preset px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:border-brand-300 hover:text-brand-700 text-slate-700 transition cursor-pointer">원본 그대로</button>
-              </div>
-
-              <!-- 개별 슬라이더 & 흑백 토글 -->
-              <div class="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-3">
-                <label class="flex items-center justify-between gap-2 cursor-pointer">
-                  <div>
-                    <div class="text-xs font-bold text-slate-800">흑백 (그레이스케일)</div>
-                    <div class="text-[11px] text-slate-500">이 악보만 흑백 또는 컬러로 출력</div>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <span id="adjust-label-gray" class="text-[11px] font-bold ${draft.grayscale ? 'text-brand-600' : 'text-slate-400'}">${draft.grayscale ? 'ON' : 'OFF'}</span>
-                    <input id="adjust-toggle-gray" type="checkbox" ${draft.grayscale ? 'checked' : ''} class="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer" />
-                  </div>
-                </label>
-
-                <div class="pt-2 border-t border-slate-200 space-y-2.5">
-                  <div class="space-y-1">
-                    <div class="flex items-center justify-between text-xs">
-                      <span class="font-semibold text-slate-600">선명도 (대비)</span>
-                      <span id="adjust-val-contrast" class="font-bold text-brand-600">${draft.contrast}%</span>
-                    </div>
-                    <input id="adjust-slider-contrast" type="range" min="60" max="220" step="2" value="${draft.contrast}" class="w-full accent-brand-600 cursor-pointer" />
-                  </div>
-                  <div class="space-y-1">
-                    <div class="flex items-center justify-between text-xs">
-                      <span class="font-semibold text-slate-600">밝기 (배경 정리)</span>
-                      <span id="adjust-val-brightness" class="font-bold text-brand-600">${draft.brightness}%</span>
-                    </div>
-                    <input id="adjust-slider-brightness" type="range" min="70" max="150" step="2" value="${draft.brightness}" class="w-full accent-brand-600 cursor-pointer" />
-                  </div>
-                </div>
               </div>
             </div>
           `,
@@ -3256,23 +3253,6 @@
             sliderB.addEventListener('input', (e) => {
               draft.brightness = Number(e.target.value);
               syncDraftUI();
-            });
-
-            const presets = {
-              crisp: { grayscale: false, contrast: 144, brightness: 96 },
-              cleanbg: { grayscale: false, contrast: 128, brightness: 112 },
-              bwcrisp: { grayscale: true, contrast: 150, brightness: 104 },
-              natural: { grayscale: false, contrast: 100, brightness: 100 }
-            };
-            document.querySelectorAll('.btn-adjust-preset').forEach((btn) => {
-              btn.addEventListener('click', () => {
-                const p = presets[btn.dataset.preset];
-                if (!p) return;
-                draft.grayscale = p.grayscale;
-                draft.contrast = p.contrast;
-                draft.brightness = p.brightness;
-                syncDraftUI();
-              });
             });
 
             const showOriginal = () => { imgEl.style.filter = 'none'; };
