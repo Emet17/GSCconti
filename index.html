@@ -635,8 +635,11 @@
           <!-- 5) 인쇄 화질 보정 (흑백, 대비, 밝기) -->
           <div class="space-y-2">
             <div class="flex items-center justify-between">
-              <h3 class="text-xs font-bold text-slate-700">인쇄 화질 보정</h3>
-              <button id="btn-reset-filters" type="button" class="text-[11px] font-semibold text-slate-500 hover:text-brand-600 cursor-pointer">
+              <div>
+                <h3 class="text-xs font-bold text-slate-700">인쇄 화질 보정 (전체 기본값)</h3>
+                <p class="text-[10px] text-slate-400">곡별 개별 보정은 콘티 카드 또는 미리보기의 [보정]에서 설정</p>
+              </div>
+              <button id="btn-reset-filters" type="button" class="text-[11px] font-semibold text-slate-500 hover:text-brand-600 cursor-pointer shrink-0">
                 기본값 복원
               </button>
             </div>
@@ -1688,7 +1691,8 @@
               key,
               memo: '',
               crop: null,
-              freeRect: null
+              freeRect: null,
+              adjust: null
             });
           }
           tasks.push({ file, sheet: pendingSheet, tempUrl });
@@ -1824,11 +1828,18 @@
                   ? `<img src="${thumbUrl}" alt="${escapeHtml(item.title)}" class="w-full h-full object-cover" />`
                   : `<span class="text-[10px] text-rose-400 font-semibold text-center leading-tight px-1">이미지<br/>없음</span>`
               }
-              ${
-                hasValidCrop(item.crop)
-                  ? `<span class="absolute bottom-0.5 right-0.5 px-1 rounded bg-brand-600/90 text-white text-[9px] font-bold leading-tight">자름</span>`
-                  : ''
-              }
+              <div class="absolute bottom-0.5 right-0.5 flex flex-col items-end gap-0.5">
+                ${
+                  hasValidCrop(item.crop)
+                    ? `<span class="px-1 rounded bg-brand-600/90 text-white text-[9px] font-bold leading-tight">자름</span>`
+                    : ''
+                }
+                ${
+                  hasValidAdjust(item.adjust)
+                    ? `<span class="px-1 rounded bg-amber-500/95 text-white text-[9px] font-bold leading-tight">보정</span>`
+                    : ''
+                }
+              </div>
             </button>
 
             <div class="flex-1 min-w-0 space-y-1.5">
@@ -1863,6 +1874,16 @@
                     <path stroke-linecap="round" stroke-linejoin="round" d="M6 2v14a2 2 0 002 2h14M18 22V8a2 2 0 00-2-2H2" />
                   </svg>
                   <span>자르기</span>
+                </button>
+                <button type="button" class="btn-adjust-item shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold border transition cursor-pointer ${
+                  hasValidAdjust(item.adjust)
+                    ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900'
+                }" title="이 악보의 선명도·밝기·흑백 개별 보정">
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                  </svg>
+                  <span>보정</span>
                 </button>
               </div>
             </div>
@@ -1900,6 +1921,7 @@
 
           card.querySelector('.btn-zoom-thumb').addEventListener('click', () => openSheetZoomModal(item.sheetId, item.title));
           card.querySelector('.btn-crop-item').addEventListener('click', () => openCropSheetModal(item));
+          card.querySelector('.btn-adjust-item').addEventListener('click', () => openAdjustSheetModal(item));
           card.querySelector('.btn-move-up').addEventListener('click', () => moveContiItem(index, index - 1));
           card.querySelector('.btn-move-down').addEventListener('click', () => moveContiItem(index, index + 1));
           card.querySelector('.btn-delete-item').addEventListener('click', () => removeContiItem(item.uid));
@@ -1965,7 +1987,8 @@
           key: normalizeNFC(sheet.key),
           memo: normalizeNFC(sheet.memo),
           crop: null,
-          freeRect: null
+          freeRect: null,
+          adjust: null
         });
         markDirty();
         renderContiList();
@@ -1993,7 +2016,8 @@
             key: normalizeNFC(sheet.key),
             memo: normalizeNFC(sheet.memo),
             crop: null,
-            freeRect: null
+            freeRect: null,
+            adjust: null
           });
         });
 
@@ -2281,7 +2305,8 @@
             key: normalizeNFC(item.key),
             memo: normalizeNFC(item.memo),
             crop: cloneCrop(item.crop),
-            freeRect: cloneFreeRect(item.freeRect)
+            freeRect: cloneFreeRect(item.freeRect),
+            adjust: cloneAdjust(item.adjust)
           })),
           layout: sanitizeLayout(state.conti.layout),
           createdAt: existing ? existing.createdAt : now,
@@ -2381,7 +2406,8 @@
               key: normalizeNFC(item.key),
               memo: normalizeNFC(item.memo),
               crop: cloneCrop(item.crop),
-              freeRect: cloneFreeRect(item.freeRect)
+              freeRect: cloneFreeRect(item.freeRect),
+              adjust: cloneAdjust(item.adjust)
             })),
             layout: sanitizeLayout(saved.layout)
           };
@@ -2437,7 +2463,8 @@
             key: normalizeNFC(i.key),
             memo: normalizeNFC(i.memo),
             crop: cloneCrop(i.crop),
-            freeRect: cloneFreeRect(i.freeRect)
+            freeRect: cloneFreeRect(i.freeRect),
+            adjust: cloneAdjust(i.adjust)
           })),
           layout: sanitizeLayout(saved.layout),
           createdAt: now,
@@ -2681,285 +2708,212 @@
         };
       }
 
-      function getCropCacheKey(sheetId, baseUrl, crop) {
-        if (!hasValidCrop(crop)) return '';
-        return `${sheetId}|${baseUrl}|${crop.x.toFixed(4)},${crop.y.toFixed(4)},${crop.w.toFixed(4)},${crop.h.toFixed(4)}`;
+      // 악보 개별 화질 보정(흑백/대비/밝기) 유효성 검증 및 필터 빌더
+      function hasValidAdjust(adjust) {
+        if (!adjust || typeof adjust !== 'object') return false;
+        const c = Number(adjust.contrast);
+        const b = Number(adjust.brightness);
+        return Number.isFinite(c) && Number.isFinite(b);
       }
 
-      function invalidateCroppedCacheForSheet(sheetId) {
-        for (const [k, url] of Array.from(croppedUrlCache.entries())) {
-          if (k.startsWith(`${sheetId}|`)) {
-            try { URL.revokeObjectURL(url); } catch {}
-            croppedUrlCache.delete(k);
-          }
-        }
-      }
-
-      function ensureCroppedImageUrl(item, onReady) {
-        const baseUrl = getSheetImageUrl(item.sheetId, onReady);
-        if (!baseUrl) return '';
-        if (!hasValidCrop(item.crop)) return baseUrl;
-
-        const key = getCropCacheKey(item.sheetId, baseUrl, item.crop);
-        if (croppedUrlCache.has(key)) return croppedUrlCache.get(key);
-
-        if (!ensureCroppedImageUrl._pending) ensureCroppedImageUrl._pending = new Set();
-        if (!ensureCroppedImageUrl._pending.has(key)) {
-          ensureCroppedImageUrl._pending.add(key);
-          loadImageFromUrl(baseUrl)
-            .then((img) => {
-              const natW = img.naturalWidth || img.width;
-              const natH = img.naturalHeight || img.height;
-              const sx = Math.max(0, Math.round(item.crop.x * natW));
-              const sy = Math.max(0, Math.round(item.crop.y * natH));
-              const sw = Math.max(10, Math.min(natW - sx, Math.round(item.crop.w * natW)));
-              const sh = Math.max(10, Math.min(natH - sy, Math.round(item.crop.h * natH)));
-
-              const canvas = document.createElement('canvas');
-              canvas.width = sw;
-              canvas.height = sh;
-              const ctx = canvas.getContext('2d');
-              ctx.fillStyle = '#ffffff';
-              ctx.fillRect(0, 0, sw, sh);
-              ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-
-              canvas.toBlob((blob) => {
-                ensureCroppedImageUrl._pending.delete(key);
-                if (blob) {
-                  const objUrl = URL.createObjectURL(blob);
-                  croppedUrlCache.set(key, objUrl);
-                  if (typeof onReady === 'function') onReady(objUrl);
-                }
-              }, 'image/jpeg', 0.92);
-            })
-            .catch(() => {
-              ensureCroppedImageUrl._pending.delete(key);
-            });
-        }
-        return baseUrl;
-      }
-
-      function detectAutoTrimCrop(img) {
-        const maxScan = 500;
-        const natW = img.naturalWidth || img.width;
-        const natH = img.naturalHeight || img.height;
-        const ratio = Math.min(1, maxScan / Math.max(natW, natH));
-        const w = Math.max(10, Math.round(natW * ratio));
-        const h = Math.max(10, Math.round(natH * ratio));
-
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, w, h);
-        const { data } = ctx.getImageData(0, 0, w, h);
-
-        let minX = w, minY = h, maxX = 0, maxY = 0;
-        let found = false;
-        for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) {
-            const idx = (y * w + x) * 4;
-            if (data[idx + 3] > 30 && (data[idx] < 242 || data[idx + 1] < 242 || data[idx + 2] < 242)) {
-              if (x < minX) minX = x;
-              if (x > maxX) maxX = x;
-              if (y < minY) minY = y;
-              if (y > maxY) maxY = y;
-              found = true;
-            }
-          }
-        }
-        if (!found || maxX <= minX || maxY <= minY) return { x: 0, y: 0, w: 1, h: 1 };
-
-        const padX = Math.max(4, Math.round(w * 0.015));
-        const padY = Math.max(4, Math.round(h * 0.015));
-        const x0 = Math.max(0, minX - padX) / w;
-        const y0 = Math.max(0, minY - padY) / h;
-        const x1 = Math.min(w, maxX + padX + 1) / w;
-        const y1 = Math.min(h, maxY + padY + 1) / h;
-
+      function cloneAdjust(adjust) {
+        if (!hasValidAdjust(adjust)) return null;
         return {
-          x: x0,
-          y: y0,
-          w: Math.max(0.08, x1 - x0),
-          h: Math.max(0.08, y1 - y0)
+          grayscale: Boolean(adjust.grayscale),
+          contrast: Math.max(60, Math.min(220, Math.round(Number(adjust.contrast)))),
+          brightness: Math.max(70, Math.min(150, Math.round(Number(adjust.brightness))))
         };
       }
 
-      async function openCropSheetModal(item) {
+      function getEffectiveItemAdjust(item, layout) {
+        if (item && hasValidAdjust(item.adjust)) {
+          return cloneAdjust(item.adjust);
+        }
+        return {
+          grayscale: Boolean(layout?.grayscale),
+          contrast: Number.isFinite(Number(layout?.contrast)) ? Number(layout.contrast) : 105,
+          brightness: Number.isFinite(Number(layout?.brightness)) ? Number(layout.brightness) : 100
+        };
+      }
+
+      function buildCssFilterFromAdjust(adj) {
+        if (!adj) return '';
+        return [
+          adj.grayscale ? 'grayscale(100%)' : '',
+          `contrast(${adj.contrast}%)`,
+          `brightness(${adj.brightness}%)`
+        ].filter(Boolean).join(' ');
+      }
+
+      async function openAdjustSheetModal(item) {
         const sheet = getSheetById(item.sheetId);
-        if (sheet && !(sheet.blob instanceof Blob) && sheet.cloudImagePath) {
+        if (sheet && !isValidImageBlob(sheet.blob) && state.cloud.client && state.cloud.user) {
           showToast('고화질 원본 악보를 불러오는 중...', 'info', 1800);
           await ensureSheetFullBlob(item.sheetId, { silent: false });
         }
-        const baseUrl = getSheetImageUrl(item.sheetId);
-        if (!baseUrl) {
-          showToast('자를 악보 이미지를 찾을 수 없습니다.', 'warning');
+        const previewUrl = ensureCroppedImageUrl(item, (croppedUrl) => {
+          const previewImg = document.getElementById('adjust-preview-img');
+          if (previewImg && croppedUrl) previewImg.src = croppedUrl;
+        });
+        if (!previewUrl) {
+          showToast('보정할 악보 이미지를 찾을 수 없습니다.', 'warning');
           return;
         }
 
-        let cropRect = hasValidCrop(item.crop) ? { ...item.crop } : { x: 0, y: 0, w: 1, h: 1 };
+        const L = state.conti.layout;
+        const wasIndividual = hasValidAdjust(item.adjust);
+        const draft = getEffectiveItemAdjust(item, L);
 
         openModal({
-          title: `악보 자르기 — ${item.title || '악보'}`,
-          maxWidth: 'max-w-3xl',
+          title: `악보 화질 보정 — ${item.title || '악보'}`,
+          maxWidth: 'max-w-2xl',
           bodyHtml: `
-            <div class="space-y-3">
+            <div class="space-y-3.5">
               <div class="flex flex-wrap items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs">
-                <span class="text-slate-600">파란 테두리나 모서리를 드래그해 남길 악보 영역을 선택하세요.</span>
-                <div class="flex items-center gap-1.5">
-                  <button id="btn-crop-auto-trim" type="button" class="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-brand-50 text-brand-700 border border-brand-200 hover:bg-brand-100 transition cursor-pointer">
-                    ✨ 흰 여백 자동 제거
-                  </button>
-                  <button id="btn-crop-reset-full" type="button" class="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-100 transition cursor-pointer">
-                    전체 복원
-                  </button>
-                </div>
+                <span class="font-medium ${wasIndividual ? 'text-amber-700' : 'text-slate-600'}">
+                  ${wasIndividual ? '● 현재 이 악보만의 개별 보정이 적용 중입니다.' : '● 현재 [레이아웃·인쇄]의 전체 기본 보정값을 따르고 있습니다.'}
+                </span>
+                <button id="btn-adjust-compare-orig" type="button" class="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 transition cursor-pointer select-none">
+                  👁 누르고 원본 비교
+                </button>
               </div>
 
-              <div class="bg-slate-900 rounded-2xl p-3 flex items-center justify-center overflow-hidden min-h-[300px] max-h-[60vh]">
-                <div id="crop-stage" class="relative inline-block select-none touch-none">
-                  <img id="crop-source-img" src="${baseUrl}" alt="자르기 원본" class="block max-w-full max-h-[54vh] w-auto h-auto pointer-events-none rounded" />
-                  <div id="crop-mask-top" class="absolute left-0 right-0 top-0 bg-slate-950/60 pointer-events-none"></div>
-                  <div id="crop-mask-bottom" class="absolute left-0 right-0 bottom-0 bg-slate-950/60 pointer-events-none"></div>
-                  <div id="crop-mask-left" class="absolute left-0 bg-slate-950/60 pointer-events-none"></div>
-                  <div id="crop-mask-right" class="absolute right-0 bg-slate-950/60 pointer-events-none"></div>
+              <!-- 실시간 보정 미리보기 영역 -->
+              <div class="bg-slate-200/80 border border-slate-300 rounded-2xl p-3 flex items-center justify-center overflow-hidden min-h-[260px] max-h-[46vh]">
+                <img
+                  id="adjust-preview-img"
+                  src="${previewUrl}"
+                  alt="보정 미리보기"
+                  class="max-w-full max-h-[42vh] w-auto h-auto rounded-lg shadow bg-white object-contain"
+                  style="filter: ${buildCssFilterFromAdjust(draft)};"
+                />
+              </div>
 
-                  <div id="crop-selection-box" class="absolute border-2 border-brand-400 shadow-[0_0_0_1px_rgba(255,255,255,0.8)] cursor-move">
-                    <div class="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none">
-                      <div class="border-r border-b border-white/25"></div>
-                      <div class="border-r border-b border-white/25"></div>
-                      <div class="border-b border-white/25"></div>
-                      <div class="border-r border-b border-white/25"></div>
-                      <div class="border-r border-b border-white/25"></div>
-                      <div class="border-b border-white/25"></div>
-                      <div class="border-r border-white/25"></div>
-                      <div class="border-r border-white/25"></div>
-                      <div></div>
+              <!-- 빠른 보정 프리셋 -->
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="text-[11px] font-bold text-slate-500 mr-1">빠른 프리셋:</span>
+                <button type="button" data-preset="crisp" class="btn-adjust-preset px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:border-brand-300 hover:text-brand-700 text-slate-700 transition cursor-pointer">흐린 악보 진하게</button>
+                <button type="button" data-preset="cleanbg" class="btn-adjust-preset px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:border-brand-300 hover:text-brand-700 text-slate-700 transition cursor-pointer">어두운 배경 하얗게</button>
+                <button type="button" data-preset="bwcrisp" class="btn-adjust-preset px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:border-brand-300 hover:text-brand-700 text-slate-700 transition cursor-pointer">흑백 선명</button>
+                <button type="button" data-preset="natural" class="btn-adjust-preset px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:border-brand-300 hover:text-brand-700 text-slate-700 transition cursor-pointer">원본 그대로</button>
+              </div>
+
+              <!-- 개별 슬라이더 & 흑백 토글 -->
+              <div class="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-3">
+                <label class="flex items-center justify-between gap-2 cursor-pointer">
+                  <div>
+                    <div class="text-xs font-bold text-slate-800">흑백 (그레이스케일)</div>
+                    <div class="text-[11px] text-slate-500">이 악보만 흑백 또는 컬러로 출력</div>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span id="adjust-label-gray" class="text-[11px] font-bold ${draft.grayscale ? 'text-brand-600' : 'text-slate-400'}">${draft.grayscale ? 'ON' : 'OFF'}</span>
+                    <input id="adjust-toggle-gray" type="checkbox" ${draft.grayscale ? 'checked' : ''} class="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer" />
+                  </div>
+                </label>
+
+                <div class="pt-2 border-t border-slate-200 space-y-2.5">
+                  <div class="space-y-1">
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="font-semibold text-slate-600">선명도 (대비)</span>
+                      <span id="adjust-val-contrast" class="font-bold text-brand-600">${draft.contrast}%</span>
                     </div>
-                    <div data-dir="nw" class="crop-handle absolute -top-2 -left-2 w-4 h-4 rounded-full bg-white border-2 border-brand-600 shadow cursor-nwse-resize"></div>
-                    <div data-dir="n"  class="crop-handle absolute -top-1.5 left-1/2 -translate-x-1/2 w-6 h-3 rounded-full bg-white border-2 border-brand-600 shadow cursor-ns-resize"></div>
-                    <div data-dir="ne" class="crop-handle absolute -top-2 -right-2 w-4 h-4 rounded-full bg-white border-2 border-brand-600 shadow cursor-nesw-resize"></div>
-                    <div data-dir="e"  class="crop-handle absolute top-1/2 -translate-y-1/2 -right-1.5 w-3 h-6 rounded-full bg-white border-2 border-brand-600 shadow cursor-ew-resize"></div>
-                    <div data-dir="se" class="crop-handle absolute -bottom-2 -right-2 w-4 h-4 rounded-full bg-white border-2 border-brand-600 shadow cursor-nwse-resize"></div>
-                    <div data-dir="s"  class="crop-handle absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-6 h-3 rounded-full bg-white border-2 border-brand-600 shadow cursor-ns-resize"></div>
-                    <div data-dir="sw" class="crop-handle absolute -bottom-2 -left-2 w-4 h-4 rounded-full bg-white border-2 border-brand-600 shadow cursor-nesw-resize"></div>
-                    <div data-dir="w"  class="crop-handle absolute top-1/2 -translate-y-1/2 -left-1.5 w-3 h-6 rounded-full bg-white border-2 border-brand-600 shadow cursor-ew-resize"></div>
+                    <input id="adjust-slider-contrast" type="range" min="60" max="220" step="2" value="${draft.contrast}" class="w-full accent-brand-600 cursor-pointer" />
+                  </div>
+                  <div class="space-y-1">
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="font-semibold text-slate-600">밝기 (배경 정리)</span>
+                      <span id="adjust-val-brightness" class="font-bold text-brand-600">${draft.brightness}%</span>
+                    </div>
+                    <input id="adjust-slider-brightness" type="range" min="70" max="150" step="2" value="${draft.brightness}" class="w-full accent-brand-600 cursor-pointer" />
                   </div>
                 </div>
-              </div>
-
-              <div class="flex items-center justify-between text-[11px] text-slate-500 px-1">
-                <span id="crop-percent-info">선택 영역: 가로 100% × 세로 100%</span>
-                <span>※ 원본 악보 DB는 유지되며 현재 콘티에만 적용됩니다.</span>
               </div>
             </div>
           `,
           buttons: [
             { label: '취소', variant: 'secondary', onClick: closeModal },
             {
-              label: '자르기 적용',
-              variant: 'primary',
+              label: '전체 기본값 따르기',
+              variant: 'secondary',
               onClick: () => {
-                const isFull = cropRect.x <= 0.003 && cropRect.y <= 0.003 && cropRect.w >= 0.994 && cropRect.h >= 0.994;
-                item.crop = isFull ? null : cloneCrop(cropRect);
+                item.adjust = null;
                 markDirty();
                 renderContiList();
                 renderPreview();
                 closeModal();
-                showToast(isFull ? '원본 전체 영역으로 복원했습니다.' : '악보 자르기 영역을 적용했습니다.', 'success');
+                showToast('이 악보가 전체 기본 화질 보정을 따르도록 복원했습니다.', 'info');
+              }
+            },
+            {
+              label: '이 악보에 적용',
+              variant: 'primary',
+              onClick: () => {
+                item.adjust = cloneAdjust(draft);
+                markDirty();
+                renderContiList();
+                renderPreview();
+                closeModal();
+                showToast(`'${item.title || '악보'}'에 개별 화질 보정을 적용했습니다.`, 'success');
               }
             }
           ],
           onMount: () => {
-            const stage = document.getElementById('crop-stage');
-            const imgEl = document.getElementById('crop-source-img');
-            const boxEl = document.getElementById('crop-selection-box');
-            const maskTop = document.getElementById('crop-mask-top');
-            const maskBottom = document.getElementById('crop-mask-bottom');
-            const maskLeft = document.getElementById('crop-mask-left');
-            const maskRight = document.getElementById('crop-mask-right');
-            const infoEl = document.getElementById('crop-percent-info');
+            const imgEl = document.getElementById('adjust-preview-img');
+            const chkGray = document.getElementById('adjust-toggle-gray');
+            const lblGray = document.getElementById('adjust-label-gray');
+            const sliderC = document.getElementById('adjust-slider-contrast');
+            const valC = document.getElementById('adjust-val-contrast');
+            const sliderB = document.getElementById('adjust-slider-brightness');
+            const valB = document.getElementById('adjust-val-brightness');
+            const btnCompare = document.getElementById('btn-adjust-compare-orig');
 
-            const renderCropBox = () => {
-              const l = cropRect.x * 100;
-              const t = cropRect.y * 100;
-              const w = cropRect.w * 100;
-              const h = cropRect.h * 100;
-              boxEl.style.left = `${l}%`;
-              boxEl.style.top = `${t}%`;
-              boxEl.style.width = `${w}%`;
-              boxEl.style.height = `${h}%`;
-              maskTop.style.height = `${t}%`;
-              maskBottom.style.height = `${Math.max(0, 100 - t - h)}%`;
-              maskLeft.style.top = `${t}%`;
-              maskLeft.style.height = `${h}%`;
-              maskLeft.style.width = `${l}%`;
-              maskRight.style.top = `${t}%`;
-              maskRight.style.height = `${h}%`;
-              maskRight.style.width = `${Math.max(0, 100 - l - w)}%`;
-              infoEl.textContent = `선택 영역: 가로 ${Math.round(w)}% × 세로 ${Math.round(h)}%`;
+            const syncDraftUI = () => {
+              chkGray.checked = Boolean(draft.grayscale);
+              lblGray.textContent = draft.grayscale ? 'ON' : 'OFF';
+              lblGray.className = `text-[11px] font-bold ${draft.grayscale ? 'text-brand-600' : 'text-slate-400'}`;
+              sliderC.value = String(draft.contrast);
+              valC.textContent = `${draft.contrast}%`;
+              sliderB.value = String(draft.brightness);
+              valB.textContent = `${draft.brightness}%`;
+              imgEl.style.filter = buildCssFilterFromAdjust(draft);
             };
 
-            renderCropBox();
-            let dragState = null;
+            chkGray.addEventListener('change', (e) => {
+              draft.grayscale = e.target.checked;
+              syncDraftUI();
+            });
+            sliderC.addEventListener('input', (e) => {
+              draft.contrast = Number(e.target.value);
+              syncDraftUI();
+            });
+            sliderB.addEventListener('input', (e) => {
+              draft.brightness = Number(e.target.value);
+              syncDraftUI();
+            });
 
-            const startDrag = (e, mode, dir = '') => {
-              e.preventDefault();
-              e.stopPropagation();
-              const rect = stage.getBoundingClientRect();
-              if (rect.width <= 0 || rect.height <= 0) return;
-              dragState = { mode, dir, startX: e.clientX, startY: e.clientY, stageW: rect.width, stageH: rect.height, orig: { ...cropRect } };
+            const presets = {
+              crisp: { grayscale: false, contrast: 144, brightness: 96 },
+              cleanbg: { grayscale: false, contrast: 128, brightness: 112 },
+              bwcrisp: { grayscale: true, contrast: 150, brightness: 104 },
+              natural: { grayscale: false, contrast: 100, brightness: 100 }
             };
-
-            boxEl.addEventListener('pointerdown', (e) => {
-              if (e.target.classList.contains('crop-handle')) return;
-              startDrag(e, 'move');
-            });
-            boxEl.querySelectorAll('.crop-handle').forEach((h) => {
-              h.addEventListener('pointerdown', (e) => startDrag(e, 'resize', h.dataset.dir || ''));
-            });
-
-            const onPointerMove = (e) => {
-              if (!dragState) return;
-              const dx = (e.clientX - dragState.startX) / dragState.stageW;
-              const dy = (e.clientY - dragState.startY) / dragState.stageH;
-              const o = dragState.orig;
-              const MIN = 0.06;
-
-              if (dragState.mode === 'move') {
-                cropRect.x = Math.max(0, Math.min(1 - o.w, o.x + dx));
-                cropRect.y = Math.max(0, Math.min(1 - o.h, o.y + dy));
-              } else {
-                let left = o.x, top = o.y, right = o.x + o.w, bottom = o.y + o.h;
-                if (dragState.dir.includes('w')) left = Math.max(0, Math.min(right - MIN, o.x + dx));
-                if (dragState.dir.includes('e')) right = Math.min(1, Math.max(left + MIN, o.x + o.w + dx));
-                if (dragState.dir.includes('n')) top = Math.max(0, Math.min(bottom - MIN, o.y + dy));
-                if (dragState.dir.includes('s')) bottom = Math.min(1, Math.max(top + MIN, o.y + o.h + dy));
-                cropRect = { x: left, y: top, w: right - left, h: bottom - top };
-              }
-              renderCropBox();
-            };
-
-            const onPointerUp = () => { dragState = null; };
-            window.addEventListener('pointermove', onPointerMove);
-            window.addEventListener('pointerup', onPointerUp);
-
-            document.getElementById('btn-crop-auto-trim').addEventListener('click', () => {
-              if (imgEl.complete && imgEl.naturalWidth > 0) {
-                cropRect = detectAutoTrimCrop(imgEl);
-                renderCropBox();
-                showToast('바깥 흰 여백을 자동으로 감지했습니다.', 'info');
-              }
-            });
-            document.getElementById('btn-crop-reset-full').addEventListener('click', () => {
-              cropRect = { x: 0, y: 0, w: 1, h: 1 };
-              renderCropBox();
+            document.querySelectorAll('.btn-adjust-preset').forEach((btn) => {
+              btn.addEventListener('click', () => {
+                const p = presets[btn.dataset.preset];
+                if (!p) return;
+                draft.grayscale = p.grayscale;
+                draft.contrast = p.contrast;
+                draft.brightness = p.brightness;
+                syncDraftUI();
+              });
             });
 
-            return () => {
-              window.removeEventListener('pointermove', onPointerMove);
-              window.removeEventListener('pointerup', onPointerUp);
-            };
+            const showOriginal = () => { imgEl.style.filter = 'none'; };
+            const restoreDraft = () => { imgEl.style.filter = buildCssFilterFromAdjust(draft); };
+            btnCompare.addEventListener('pointerdown', showOriginal);
+            btnCompare.addEventListener('pointerup', restoreDraft);
+            btnCompare.addEventListener('pointerleave', restoreDraft);
+            btnCompare.addEventListener('pointercancel', restoreDraft);
           }
         });
       }
@@ -3039,12 +2993,6 @@
         const hasCustomPages = pages.some((p) => p.isOverridden);
         els.previewSummaryText.textContent = `${orientLabel} · 기본 ${perPage}열${hasCustomPages ? ' (개별 적용)' : ''} · 총 ${pages.length}페이지 · 드래그로 위치/크기 조절`;
         els.previewPagesContainer.innerHTML = '';
-
-        const imgFilter = [
-          L.grayscale ? 'grayscale(100%)' : '',
-          `contrast(${L.contrast}%)`,
-          `brightness(${L.brightness}%)`
-        ].filter(Boolean).join(' ');
 
         const headerFontSize = Number(L.headerFontSize) || 12;
 
@@ -3162,7 +3110,7 @@
               imgEl.src = displayUrl;
               imgEl.alt = item.title || '악보';
               imgEl.className = 'w-full h-full object-contain block pointer-events-none';
-              imgEl.style.filter = imgFilter;
+              imgEl.style.filter = buildCssFilterFromAdjust(getEffectiveItemAdjust(item, L));
               imgWrap.appendChild(imgEl);
             } else if (sheetMeta && downloadErr) {
               imgWrap.classList.remove('pointer-events-none');
@@ -3209,6 +3157,9 @@
             toolsBar.className = 'slot-floating-tools opacity-0 pointer-events-none absolute top-1.5 right-1.5 flex items-center gap-1 bg-slate-900/85 text-white px-1.5 py-1 rounded-lg shadow-md z-30 transition-opacity';
             toolsBar.innerHTML = `
               <button type="button" class="btn-slot-crop px-1.5 py-0.5 rounded hover:bg-white/20 text-[11px] font-semibold cursor-pointer">✂ 자르기</button>
+              <button type="button" class="btn-slot-adjust px-1.5 py-0.5 rounded hover:bg-white/20 text-[11px] font-semibold cursor-pointer ${
+                hasValidAdjust(item.adjust) ? 'text-amber-300' : ''
+              }">☀ 보정</button>
               ${
                 hasValidFreeRect(item.freeRect)
                   ? `<button type="button" class="btn-slot-reset px-1.5 py-0.5 rounded hover:bg-white/20 text-[11px] font-semibold text-amber-300 cursor-pointer" title="위치·크기 초기화">↺</button>`
@@ -3219,6 +3170,10 @@
             toolsBar.querySelector('.btn-slot-crop').addEventListener('click', (e) => {
               e.stopPropagation();
               openCropSheetModal(item);
+            });
+            toolsBar.querySelector('.btn-slot-adjust').addEventListener('click', (e) => {
+              e.stopPropagation();
+              openAdjustSheetModal(item);
             });
             const slotResetBtn = toolsBar.querySelector('.btn-slot-reset');
             if (slotResetBtn) {
@@ -3617,11 +3572,7 @@
                 const drawY = slotY + (slotH - drawH) / 2;
 
                 ctx.save();
-                ctx.filter = [
-                  L.grayscale ? 'grayscale(100%)' : '',
-                  `contrast(${L.contrast}%)`,
-                  `brightness(${L.brightness}%)`
-                ].filter(Boolean).join(' ') || 'none';
+                ctx.filter = buildCssFilterFromAdjust(getEffectiveItemAdjust(item, L)) || 'none';
                 ctx.drawImage(img, sx, sy, sw, sh, drawX, drawY, drawW, drawH);
                 ctx.restore();
               } catch (imgErr) {
